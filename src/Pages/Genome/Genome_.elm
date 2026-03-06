@@ -403,8 +403,8 @@ show16S model mag =
                                 database of 16S amplicon sequences and where
                                 they are found in the environment. For details,
                                 see """
-                            , Html.a [HtmlAttr.href "https://doi.org/10.1101/2025.07.18.665519"]
-                                [ Html.text "(Matias Rodrigues et al., 2025)"]
+                            , Html.a [HtmlAttr.href "https://doi.org/10.1016/j.cell.2026.01.021"]
+                                [ Html.text "(Matias Rodrigues et al., 2026)"]
                             , Html.text "."
                             ]
 
