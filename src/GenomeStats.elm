@@ -56,7 +56,7 @@ chartNrContigs sel =
                     else if x < 51
                         then "21-50"
                     else if x < 100
-                        then "50-99"
+                        then "51-99"
                     else "100+")
         data =
             ["1", "2-5", "6-10", "11-20", "21-50", "51-99", "100+"]
