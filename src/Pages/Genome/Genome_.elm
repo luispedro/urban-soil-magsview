@@ -682,19 +682,49 @@ genomeMapControls model globalMax =
     Html.div
         [ HtmlAttr.style "display" "flex"
         , HtmlAttr.style "align-items" "center"
-        , HtmlAttr.style "gap" "0.5em"
+        , HtmlAttr.style "gap" "0.25em"
         , HtmlAttr.style "margin-bottom" "0.5em"
         ]
-        [ mapButton GenomeMapScrollLeft (offset > 0) "<"
-        , mapButton GenomeMapZoomIn (zoom < 50) "+"
-        , mapButton GenomeMapZoomOut (zoom > 1) "-"
-        , mapButton GenomeMapZoomReset (zoom /= 1.0) "Reset"
-        , mapButton GenomeMapScrollRight True ">"
-        , Html.span
-            [ HtmlAttr.style "font-size" "0.85em"
-            , HtmlAttr.style "color" "#666"
+        [ Html.div
+            [ HtmlAttr.style "display" "inline-flex"
+            , HtmlAttr.style "border" "1px solid #ccc"
+            , HtmlAttr.style "border-radius" "4px"
+            , HtmlAttr.style "overflow" "hidden"
             ]
-            [ Html.text (String.fromInt (round zoom) ++ "x") ]
+            [ mapButtonDual GenomeMapScrollLeft (zoom > 1 && offset > 0) "\u{25C0}" "\u{2039}"
+            , mapButtonSep
+            , mapButton GenomeMapZoomOut (zoom > 1) "\u{2212}"
+            , mapButtonSep
+            , Html.span
+                [ HtmlAttr.style "padding" "0.3em 0.6em"
+                , HtmlAttr.style "font-size" "0.85em"
+                , HtmlAttr.style "color" "#555"
+                , HtmlAttr.style "background" "#fafafa"
+                , HtmlAttr.style "min-width" "3em"
+                , HtmlAttr.style "text-align" "center"
+                , HtmlAttr.style "user-select" "none"
+                ]
+                [ Html.text (String.fromInt (round zoom) ++ "x") ]
+            , mapButtonSep
+            , mapButton GenomeMapZoomIn (zoom < 50) "+"
+            , mapButtonSep
+            , mapButtonDual GenomeMapScrollRight (zoom > 1) "\u{25B6}" "\u{203A}"
+            ]
+        , if zoom /= 1.0 then
+            Html.button
+                [ HE.onClick GenomeMapZoomReset
+                , HtmlAttr.style "padding" "0.3em 0.7em"
+                , HtmlAttr.style "font-size" "0.85em"
+                , HtmlAttr.style "cursor" "pointer"
+                , HtmlAttr.style "border" "1px solid #ccc"
+                , HtmlAttr.style "border-radius" "4px"
+                , HtmlAttr.style "background" "#fff"
+                , HtmlAttr.style "color" "#555"
+                , HtmlAttr.style "margin-left" "0.25em"
+                ]
+                [ Html.text "Reset" ]
+          else
+            Html.text ""
         , if String.isEmpty posLabel then
             Html.text ""
           else
@@ -712,10 +742,43 @@ mapButton msg enabled label =
     Html.button
         [ HE.onClick msg
         , HtmlAttr.disabled (not enabled)
-        , HtmlAttr.style "padding" "0.2em 0.6em"
+        , HtmlAttr.style "padding" "0.3em 0.7em"
+        , HtmlAttr.style "font-size" "0.9em"
         , HtmlAttr.style "cursor" (if enabled then "pointer" else "default")
+        , HtmlAttr.style "border" "none"
+        , HtmlAttr.style "background" (if enabled then "#fff" else "#f5f5f5")
+        , HtmlAttr.style "color" (if enabled then "#333" else "#bbb")
+        , HtmlAttr.style "min-width" "2em"
+        , HtmlAttr.style "transition" "background 0.15s"
         ]
         [ Html.text label ]
+
+
+mapButtonDual : Msg -> Bool -> String -> String -> Html.Html Msg
+mapButtonDual msg enabled enabledLabel disabledLabel =
+    Html.button
+        [ HE.onClick msg
+        , HtmlAttr.disabled (not enabled)
+        , HtmlAttr.style "padding" "0.3em 0.7em"
+        , HtmlAttr.style "font-size" "0.9em"
+        , HtmlAttr.style "cursor" (if enabled then "pointer" else "default")
+        , HtmlAttr.style "border" "none"
+        , HtmlAttr.style "background" (if enabled then "#fff" else "#f5f5f5")
+        , HtmlAttr.style "color" (if enabled then "#333" else "#bbb")
+        , HtmlAttr.style "min-width" "2em"
+        , HtmlAttr.style "transition" "background 0.15s"
+        ]
+        [ Html.text (if enabled then enabledLabel else disabledLabel) ]
+
+
+mapButtonSep : Html.Html msg
+mapButtonSep =
+    Html.div
+        [ HtmlAttr.style "width" "1px"
+        , HtmlAttr.style "background" "#ddd"
+        , HtmlAttr.style "align-self" "stretch"
+        ]
+        []
 
 
 type alias ContigInfo =
