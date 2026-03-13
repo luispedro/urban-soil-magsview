@@ -12,6 +12,9 @@ import View exposing (View)
 import Http
 import Json.Decode as D
 
+import Svg
+import Svg.Attributes as SvgAttr
+
 import W.InputCheckbox as InputCheckbox
 import Bootstrap.Button as Button
 import Bootstrap.Dropdown as Dropdown
@@ -27,7 +30,7 @@ import DataModel exposing (MAG)
 import Layouts
 import GenomeStats exposing (taxonomyLast, printableTaxonomy, showTaxon)
 import Utils exposing (mkTooltipQuestionMark)
-import Downloads exposing (mkFASTALink, mkENOGLink)
+import Downloads exposing (mkFASTALink, mkENOGLink, mkEMapperSummaryLink)
 
 -- INIT
 
@@ -52,13 +55,29 @@ type alias MAGData =
     , argData : List ARG
     }
 
+type alias EMapperGene =
+    { seqid : String
+    , contig : String
+    , start : Int
+    , end : Int
+    , strand : String
+    , cogCategory : String
+    , preferredName : String
+    }
+
 type LoadedDataModel =
     Loaded MAGData
     | LoadError String
     | Waiting
 
+type EMapperDataModel
+    = EMapperLoaded (List EMapperGene)
+    | EMapperError String
+    | EMapperWaiting
+
 type alias Model =
     { magdata : LoadedDataModel
+    , emapperData : EMapperDataModel
     , expanded : Bool
     , expanded16S : List Int
     , showARGSequences : Bool
@@ -66,6 +85,7 @@ type alias Model =
 
 type Msg =
     ResultsData (Result Http.Error APIResult)
+    | EMapperData (Result Http.Error String)
     | Toggle16SExpanded
     | Expand16S Int
     | ToggleShowARGSequences
@@ -102,6 +122,7 @@ decodeMAGData =
 model0 : Model
 model0 =
     { magdata = Waiting
+    , emapperData = EMapperWaiting
     , expanded = False
     , expanded16S = []
     , showARGSequences = False
@@ -109,12 +130,20 @@ model0 =
 
 cmd0 : String -> Effect Msg
 cmd0 magid =
-    Effect.sendCmd
-        (Http.get
-            { url = "/genome-data/"++ magid ++ ".json"
-            , expect = Http.expectJson ResultsData decodeMAGData
-            }
-        )
+    Effect.batch
+        [ Effect.sendCmd
+            (Http.get
+                { url = "/genome-data/"++ magid ++ ".json"
+                , expect = Http.expectJson ResultsData decodeMAGData
+                }
+            )
+        , Effect.sendCmd
+            (Http.get
+                { url = mkEMapperSummaryLink magid
+                , expect = Http.expectString EMapperData
+                }
+            )
+        ]
 
 page : Shared.Model -> Route { genome : String } -> Page Model Msg
 page shared route =
@@ -157,6 +186,19 @@ update msg model =
                 ( { model | magdata = magdata }
                 , Effect.none
                 )
+        EMapperData r ->
+            let emapperData = case r of
+                    Ok tsv -> case parseEMapperTsv tsv of
+                        Ok genes -> EMapperLoaded genes
+                        Err e -> EMapperError e
+                    Err err -> case err of
+                        Http.BadUrl s -> EMapperError ("Bad URL: " ++ s)
+                        Http.Timeout -> EMapperError "Timeout"
+                        Http.NetworkError -> EMapperError "Network error"
+                        Http.BadStatus s -> EMapperError ("Bad status: " ++ String.fromInt s)
+                        Http.BadBody s -> EMapperError ("Bad body: " ++ s)
+            in
+                ( { model | emapperData = emapperData }, Effect.none )
         Toggle16SExpanded ->
             ( { model | expanded = not model.expanded }, Effect.none )
         Expand16S ix ->
@@ -327,6 +369,11 @@ showMag model mag =
                         [ Html.text "argNorm" ]
                 , Html.text "."
                 ]
+        ]]
+    , Grid.simpleRow [ Grid.col []
+        [ Html.h2 []
+            [ Html.text "Genome organisation" ]
+        , showGenomeMap model
         ]]
     , Grid.simpleRow [ Grid.col []
         [ Html.h2 []
@@ -510,3 +557,281 @@ showARGs model mag =
                       else
                         Html.text ""
                     ]
+
+-- EMAPPER TSV PARSING
+
+parseEMapperTsv : String -> Result String (List EMapperGene)
+parseEMapperTsv tsv =
+    let
+        lines = String.lines tsv
+            |> List.filter (\l -> not (String.isEmpty (String.trim l)))
+    in
+    case lines of
+        [] -> Err "Empty TSV"
+        _ :: dataLines ->
+            let
+                parsed = List.filterMap parseTsvLine dataLines
+            in
+            if List.isEmpty parsed then
+                Err "No valid data rows found"
+            else
+                Ok parsed
+
+
+parseTsvLine : String -> Maybe EMapperGene
+parseTsvLine line =
+    case String.split "\t" line of
+        seqid :: contig :: startStr :: endStr :: strand :: cogCat :: prefName :: _ ->
+            case ( String.toInt startStr, String.toInt endStr ) of
+                ( Just start, Just end ) ->
+                    Just
+                        { seqid = seqid
+                        , contig = contig
+                        , start = start
+                        , end = end
+                        , strand = strand
+                        , cogCategory = if cogCat == "-" then "" else cogCat
+                        , preferredName = if prefName == "-" then "" else prefName
+                        }
+                _ -> Nothing
+        _ -> Nothing
+
+
+-- GENOME MAP VISUALIZATION
+
+showGenomeMap : Model -> Html.Html Msg
+showGenomeMap model =
+    case model.emapperData of
+        EMapperWaiting ->
+            Html.p [] [ Html.text "Loading genome map..." ]
+        EMapperError e ->
+            Html.p [] [ Html.text ("Could not load genome map: " ++ e) ]
+        EMapperLoaded genes ->
+            Html.div []
+                [ renderGenomeMap genes
+                , renderCogLegend genes
+                ]
+
+
+type alias ContigInfo =
+    { name : String
+    , maxPos : Int
+    , genes : List EMapperGene
+    }
+
+
+groupByContig : List EMapperGene -> List ContigInfo
+groupByContig genes =
+    let
+        contigNames =
+            genes
+                |> List.map .contig
+                |> List.foldl (\c acc -> if List.member c acc then acc else acc ++ [c]) []
+    in
+    contigNames
+        |> List.map (\cname ->
+            let
+                cGenes = List.filter (\g -> g.contig == cname) genes
+                maxP = cGenes
+                    |> List.map .end
+                    |> List.maximum
+                    |> Maybe.withDefault 0
+            in
+            { name = cname, maxPos = maxP, genes = cGenes }
+        )
+
+
+renderGenomeMap : List EMapperGene -> Html.Html Msg
+renderGenomeMap genes =
+    let
+        contigs = groupByContig genes
+        svgWidth = 1100
+        labelWidth = 120
+        mapWidth = svgWidth - labelWidth - 10
+        rowHeight = 40
+        rowSpacing = 8
+        svgHeight = List.length contigs * (rowHeight + rowSpacing) + 10
+        globalMax = contigs
+            |> List.map .maxPos
+            |> List.maximum
+            |> Maybe.withDefault 1
+        scale pos = labelWidth + toFloat pos / toFloat globalMax * mapWidth
+    in
+    Html.div [ HtmlAttr.style "overflow-x" "auto" ]
+        [ Svg.svg
+            [ SvgAttr.width (String.fromInt svgWidth)
+            , SvgAttr.height (String.fromInt svgHeight)
+            , SvgAttr.viewBox ("0 0 " ++ String.fromInt svgWidth ++ " " ++ String.fromInt svgHeight)
+            , SvgAttr.style "font-family: sans-serif; font-size: 11px;"
+            ]
+            (contigs
+                |> List.indexedMap (\i contig ->
+                    let
+                        y = toFloat (i * (rowHeight + rowSpacing)) + 5
+                        cy = y + toFloat rowHeight / 2
+                    in
+                    Svg.g []
+                        ([ Svg.text_
+                            [ SvgAttr.x "5"
+                            , SvgAttr.y (String.fromFloat (cy + 4))
+                            , SvgAttr.fill "#333"
+                            ]
+                            [ Svg.text contig.name ]
+                        , Svg.line
+                            [ SvgAttr.x1 (String.fromFloat (scale 0))
+                            , SvgAttr.y1 (String.fromFloat cy)
+                            , SvgAttr.x2 (String.fromFloat (scale contig.maxPos))
+                            , SvgAttr.y2 (String.fromFloat cy)
+                            , SvgAttr.stroke "black"
+                            , SvgAttr.strokeWidth "3"
+                            ]
+                            []
+                        ]
+                        ++ List.map (\gene -> renderGeneArrow scale cy gene) contig.genes
+                        )
+                )
+            )
+        ]
+
+
+renderGeneArrow : (Int -> Float) -> Float -> EMapperGene -> Svg.Svg Msg
+renderGeneArrow scale cy gene =
+    let
+        x1 = scale gene.start
+        x2 = scale gene.end
+        geneWidth = x2 - x1
+        arrowHeadSize = Basics.min 6 (geneWidth * 0.3)
+        halfHeight = 8
+        color = cogColor (String.left 1 gene.cogCategory)
+        tooltipText =
+            gene.seqid
+                ++ (if String.isEmpty gene.preferredName then "" else " (" ++ gene.preferredName ++ ")")
+                ++ " [" ++ (if String.isEmpty gene.cogCategory then "-" else gene.cogCategory) ++ "]"
+        points =
+            if gene.strand == "+" then
+                -- Arrow pointing right
+                String.join " "
+                    [ p x1 (cy - halfHeight)
+                    , p (x2 - arrowHeadSize) (cy - halfHeight)
+                    , p x2 cy
+                    , p (x2 - arrowHeadSize) (cy + halfHeight)
+                    , p x1 (cy + halfHeight)
+                    ]
+            else
+                -- Arrow pointing left
+                String.join " "
+                    [ p (x1 + arrowHeadSize) (cy - halfHeight)
+                    , p x2 (cy - halfHeight)
+                    , p x2 (cy + halfHeight)
+                    , p (x1 + arrowHeadSize) (cy + halfHeight)
+                    , p x1 cy
+                    ]
+    in
+    Svg.polygon
+        [ SvgAttr.points points
+        , SvgAttr.fill color
+        , SvgAttr.stroke "#333"
+        , SvgAttr.strokeWidth "0.5"
+        ]
+        [ Svg.title [] [ Svg.text tooltipText ]
+        ]
+
+
+p : Float -> Float -> String
+p x y =
+    String.fromFloat x ++ "," ++ String.fromFloat y
+
+
+cogColor : String -> String
+cogColor cat =
+    case cat of
+        "J" -> "#f06292"   -- Translation
+        "A" -> "#e91e63"   -- RNA processing
+        "K" -> "#ab47bc"   -- Transcription
+        "L" -> "#7e57c2"   -- Replication/repair
+        "B" -> "#5c6bc0"   -- Chromatin
+        "D" -> "#66bb6a"   -- Cell cycle
+        "Y" -> "#a5d6a7"   -- Nuclear structure
+        "V" -> "#43a047"   -- Defense
+        "T" -> "#ff9800"   -- Signal transduction
+        "M" -> "#8bc34a"   -- Cell wall
+        "N" -> "#00acc1"   -- Cell motility
+        "U" -> "#26c6da"   -- Secretion
+        "O" -> "#ec407a"   -- Post-translational modification
+        "C" -> "#42a5f5"   -- Energy
+        "G" -> "#fdd835"   -- Carbohydrate
+        "E" -> "#ffb74d"   -- Amino acid
+        "F" -> "#9575cd"   -- Nucleotide
+        "H" -> "#64b5f6"   -- Coenzyme
+        "I" -> "#a1887f"   -- Lipid
+        "P" -> "#4db6ac"   -- Inorganic ion
+        "Q" -> "#ff7043"   -- Secondary metabolites
+        "R" -> "#bdbdbd"   -- General function
+        "S" -> "#e0e0e0"   -- Function unknown
+        "" -> "#f5f5f5"    -- No COG
+        _ -> "#cccccc"
+
+
+cogDescription : String -> String
+cogDescription cat =
+    case cat of
+        "J" -> "Translation, ribosomal structure"
+        "A" -> "RNA processing and modification"
+        "K" -> "Transcription"
+        "L" -> "Replication, recombination and repair"
+        "B" -> "Chromatin structure"
+        "D" -> "Cell cycle control, cell division"
+        "Y" -> "Nuclear structure"
+        "V" -> "Defense mechanisms"
+        "T" -> "Signal transduction"
+        "M" -> "Cell wall/membrane biogenesis"
+        "N" -> "Cell motility"
+        "U" -> "Intracellular trafficking, secretion"
+        "O" -> "Post-translational modification"
+        "C" -> "Energy production and conversion"
+        "G" -> "Carbohydrate transport and metabolism"
+        "E" -> "Amino acid transport and metabolism"
+        "F" -> "Nucleotide transport and metabolism"
+        "H" -> "Coenzyme transport and metabolism"
+        "I" -> "Lipid transport and metabolism"
+        "P" -> "Inorganic ion transport and metabolism"
+        "Q" -> "Secondary metabolites"
+        "R" -> "General function prediction only"
+        "S" -> "Function unknown"
+        "" -> "No COG category"
+        _ -> cat
+
+
+renderCogLegend : List EMapperGene -> Html.Html Msg
+renderCogLegend genes =
+    let
+        usedCats =
+            genes
+                |> List.map (\g -> String.left 1 g.cogCategory)
+                |> List.foldl (\c acc -> if List.member c acc then acc else acc ++ [c]) []
+                |> List.sort
+        allCats = ["J","A","K","L","B","D","Y","V","T","M","N","U","O","C","G","E","F","H","I","P","Q","R","S",""]
+        catsToShow = allCats |> List.filter (\c -> List.member c usedCats)
+    in
+    Html.div [ HtmlAttr.style "margin-top" "0.5em"
+             , HtmlAttr.style "display" "flex"
+             , HtmlAttr.style "flex-wrap" "wrap"
+             , HtmlAttr.style "gap" "0.3em 1em"
+             , HtmlAttr.style "font-size" "0.85em"
+             ]
+        (catsToShow |> List.map (\cat ->
+            Html.span [ HtmlAttr.style "display" "inline-flex"
+                      , HtmlAttr.style "align-items" "center"
+                      , HtmlAttr.style "gap" "0.3em"
+                      ]
+                [ Html.span
+                    [ HtmlAttr.style "display" "inline-block"
+                    , HtmlAttr.style "width" "14px"
+                    , HtmlAttr.style "height" "14px"
+                    , HtmlAttr.style "background-color" (cogColor cat)
+                    , HtmlAttr.style "border" "1px solid #999"
+                    ]
+                    []
+                , Html.text ((if String.isEmpty cat then "-" else cat) ++ ": " ++ cogDescription cat)
+                ]
+        ))
