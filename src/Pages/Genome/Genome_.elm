@@ -81,6 +81,8 @@ type alias Model =
     , expanded : Bool
     , expanded16S : List Int
     , showARGSequences : Bool
+    , genomeMapZoom : Float
+    , genomeMapOffset : Float
     }
 
 type Msg =
@@ -89,6 +91,11 @@ type Msg =
     | Toggle16SExpanded
     | Expand16S Int
     | ToggleShowARGSequences
+    | GenomeMapZoomIn
+    | GenomeMapZoomOut
+    | GenomeMapZoomReset
+    | GenomeMapScrollLeft
+    | GenomeMapScrollRight
     | NoMsg
 
 type APIResult =
@@ -126,6 +133,8 @@ model0 =
     , expanded = False
     , expanded16S = []
     , showARGSequences = False
+    , genomeMapZoom = 1.0
+    , genomeMapOffset = 0.0
     }
 
 cmd0 : String -> Effect Msg
@@ -210,11 +219,45 @@ update msg model =
             ( { model | showARGSequences = not model.showARGSequences }
             , Effect.none
             )
+        GenomeMapZoomIn ->
+            let
+                newZoom = Basics.min 50 (model.genomeMapZoom * 1.5)
+                newOffset = clampOffset newZoom model.genomeMapOffset
+            in
+            ( { model | genomeMapZoom = newZoom, genomeMapOffset = newOffset }, Effect.none )
+        GenomeMapZoomOut ->
+            let
+                newZoom = Basics.max 1 (model.genomeMapZoom / 1.5)
+                newOffset = clampOffset newZoom model.genomeMapOffset
+            in
+            ( { model | genomeMapZoom = newZoom, genomeMapOffset = newOffset }, Effect.none )
+        GenomeMapZoomReset ->
+            ( { model | genomeMapZoom = 1.0, genomeMapOffset = 0.0 }, Effect.none )
+        GenomeMapScrollLeft ->
+            let
+                step = 0.2 / model.genomeMapZoom
+                newOffset = clampOffset model.genomeMapZoom (model.genomeMapOffset - step)
+            in
+            ( { model | genomeMapOffset = newOffset }, Effect.none )
+        GenomeMapScrollRight ->
+            let
+                step = 0.2 / model.genomeMapZoom
+                newOffset = clampOffset model.genomeMapZoom (model.genomeMapOffset + step)
+            in
+            ( { model | genomeMapOffset = newOffset }, Effect.none )
 
         _ ->
             ( model
             , Effect.none
             )
+
+
+clampOffset : Float -> Float -> Float
+clampOffset zoom offset =
+    let
+        maxOffset = Basics.max 0 (1 - 1 / zoom)
+    in
+    Basics.max 0 (Basics.min maxOffset offset)
 
 
 view :
@@ -607,10 +650,72 @@ showGenomeMap model =
         EMapperError e ->
             Html.p [] [ Html.text ("Could not load genome map: " ++ e) ]
         EMapperLoaded genes ->
+            let
+                contigs = groupByContig genes
+                globalMax = contigs
+                    |> List.map .maxPos
+                    |> List.maximum
+                    |> Maybe.withDefault 1
+            in
             Html.div []
-                [ renderGenomeMap genes
+                [ genomeMapControls model globalMax
+                , renderGenomeMap model.genomeMapZoom model.genomeMapOffset genes
                 , renderCogLegend genes
                 ]
+
+
+genomeMapControls : Model -> Int -> Html.Html Msg
+genomeMapControls model globalMax =
+    let
+        zoom = model.genomeMapZoom
+        offset = model.genomeMapOffset
+        viewFraction = 1 / zoom
+        viewStartFrac = offset * (1 - viewFraction)
+        viewStartBp = round (viewStartFrac * toFloat globalMax)
+        viewEndBp = Basics.min globalMax (round ((viewStartFrac + viewFraction) * toFloat globalMax))
+        posLabel =
+            if zoom > 1 then
+                showWithCommas viewStartBp ++ " - " ++ showWithCommas viewEndBp ++ " bp"
+            else
+                ""
+    in
+    Html.div
+        [ HtmlAttr.style "display" "flex"
+        , HtmlAttr.style "align-items" "center"
+        , HtmlAttr.style "gap" "0.5em"
+        , HtmlAttr.style "margin-bottom" "0.5em"
+        ]
+        [ mapButton GenomeMapScrollLeft (offset > 0) "<"
+        , mapButton GenomeMapZoomIn (zoom < 50) "+"
+        , mapButton GenomeMapZoomOut (zoom > 1) "-"
+        , mapButton GenomeMapZoomReset (zoom /= 1.0) "Reset"
+        , mapButton GenomeMapScrollRight True ">"
+        , Html.span
+            [ HtmlAttr.style "font-size" "0.85em"
+            , HtmlAttr.style "color" "#666"
+            ]
+            [ Html.text (String.fromInt (round zoom) ++ "x") ]
+        , if String.isEmpty posLabel then
+            Html.text ""
+          else
+            Html.span
+                [ HtmlAttr.style "font-size" "0.85em"
+                , HtmlAttr.style "color" "#666"
+                , HtmlAttr.style "margin-left" "0.5em"
+                ]
+                [ Html.text posLabel ]
+        ]
+
+
+mapButton : Msg -> Bool -> String -> Html.Html Msg
+mapButton msg enabled label =
+    Html.button
+        [ HE.onClick msg
+        , HtmlAttr.disabled (not enabled)
+        , HtmlAttr.style "padding" "0.2em 0.6em"
+        , HtmlAttr.style "cursor" (if enabled then "pointer" else "default")
+        ]
+        [ Html.text label ]
 
 
 type alias ContigInfo =
@@ -641,57 +746,158 @@ groupByContig genes =
         )
 
 
-renderGenomeMap : List EMapperGene -> Html.Html Msg
-renderGenomeMap genes =
+genomeMapLayout :
+    { labelWidth : Float
+    , mapWidth : Float
+    , rowHeight : Int
+    , rowSpacing : Int
+    }
+genomeMapLayout =
+    { labelWidth = 120
+    , mapWidth = 970
+    , rowHeight = 40
+    , rowSpacing = 8
+    }
+
+
+renderGenomeMap : Float -> Float -> List EMapperGene -> Html.Html Msg
+renderGenomeMap zoom offset genes =
     let
+        lay = genomeMapLayout
         contigs = groupByContig genes
-        svgWidth = 1100
-        labelWidth = 120
-        mapWidth = svgWidth - labelWidth - 10
-        rowHeight = 40
-        rowSpacing = 8
-        svgHeight = List.length contigs * (rowHeight + rowSpacing) + 10
+        svgHeight = List.length contigs * (lay.rowHeight + lay.rowSpacing) + 10
         globalMax = contigs
             |> List.map .maxPos
             |> List.maximum
             |> Maybe.withDefault 1
-        scale pos = labelWidth + toFloat pos / toFloat globalMax * mapWidth
+        -- Virtual width of the full zoomed map
+        virtualWidth = lay.mapWidth * zoom
+        -- viewBox: we see mapWidth worth of virtual coords, offset into the virtual space
+        vbX = offset * (virtualWidth - lay.mapWidth)
+        -- Scale maps genome position to virtual x coordinate (0 .. virtualWidth)
+        scale pos = toFloat pos / toFloat globalMax * virtualWidth
     in
-    Html.div [ HtmlAttr.style "overflow-x" "auto" ]
-        [ Svg.svg
-            [ SvgAttr.width (String.fromInt svgWidth)
-            , SvgAttr.height (String.fromInt svgHeight)
-            , SvgAttr.viewBox ("0 0 " ++ String.fromInt svgWidth ++ " " ++ String.fromInt svgHeight)
-            , SvgAttr.style "font-family: sans-serif; font-size: 11px;"
+    Html.div []
+        [ Html.div
+            [ HtmlAttr.style "display" "flex"
+            , HtmlAttr.style "border" "1px solid #ddd"
             ]
-            (contigs
-                |> List.indexedMap (\i contig ->
-                    let
-                        y = toFloat (i * (rowHeight + rowSpacing)) + 5
-                        cy = y + toFloat rowHeight / 2
-                    in
-                    Svg.g []
-                        ([ Svg.text_
+            [ -- Fixed labels column
+              Svg.svg
+                [ SvgAttr.width (String.fromFloat lay.labelWidth)
+                , SvgAttr.height (String.fromInt svgHeight)
+                , SvgAttr.viewBox ("0 0 " ++ String.fromFloat lay.labelWidth ++ " " ++ String.fromInt svgHeight)
+                , SvgAttr.style "font-family: sans-serif; font-size: 11px; flex-shrink: 0;"
+                ]
+                (contigs
+                    |> List.indexedMap (\i contig ->
+                        let
+                            y = toFloat (i * (lay.rowHeight + lay.rowSpacing)) + 5
+                            cy = y + toFloat lay.rowHeight / 2
+                        in
+                        Svg.text_
                             [ SvgAttr.x "5"
                             , SvgAttr.y (String.fromFloat (cy + 4))
                             , SvgAttr.fill "#333"
                             ]
                             [ Svg.text contig.name ]
-                        , Svg.line
-                            [ SvgAttr.x1 (String.fromFloat (scale 0))
+                    )
+                )
+            , -- Scrollable map area
+              Svg.svg
+                [ SvgAttr.width (String.fromFloat lay.mapWidth)
+                , SvgAttr.height (String.fromInt svgHeight)
+                , SvgAttr.viewBox
+                    (String.fromFloat vbX
+                        ++ " 0 "
+                        ++ String.fromFloat lay.mapWidth
+                        ++ " " ++ String.fromInt svgHeight
+                    )
+                , SvgAttr.style "font-family: sans-serif; font-size: 11px; flex-grow: 1;"
+                ]
+                (contigs
+                    |> List.indexedMap (\i contig ->
+                        let
+                            y = toFloat (i * (lay.rowHeight + lay.rowSpacing)) + 5
+                            cy = y + toFloat lay.rowHeight / 2
+                        in
+                        Svg.g []
+                            ([ Svg.line
+                                [ SvgAttr.x1 (String.fromFloat (scale 0))
+                                , SvgAttr.y1 (String.fromFloat cy)
+                                , SvgAttr.x2 (String.fromFloat (scale contig.maxPos))
+                                , SvgAttr.y2 (String.fromFloat cy)
+                                , SvgAttr.stroke "black"
+                                , SvgAttr.strokeWidth "3"
+                                ]
+                                []
+                            ]
+                            ++ List.map (\gene -> renderGeneArrow scale cy gene) contig.genes
+                            )
+                    )
+                )
+            ]
+        , renderOverviewBar zoom offset contigs globalMax
+        ]
+
+
+renderOverviewBar : Float -> Float -> List ContigInfo -> Int -> Html.Html Msg
+renderOverviewBar zoom offset contigs globalMax =
+    let
+        lay = genomeMapLayout
+        barWidth = lay.mapWidth
+        barHeight = 6 * toFloat (List.length contigs) + 4
+        viewFraction = 1 / zoom
+        viewStart = offset * (1 - viewFraction)
+        rectX = lay.labelWidth + viewStart * barWidth
+        rectW = Basics.max 4 (viewFraction * barWidth)
+    in
+    if zoom <= 1 then
+        Html.text ""
+    else
+        Html.div
+            [ HtmlAttr.style "display" "flex" ]
+            [ Html.div
+                [ HtmlAttr.style "width" (String.fromFloat lay.labelWidth ++ "px")
+                , HtmlAttr.style "flex-shrink" "0"
+                ]
+                []
+            , Svg.svg
+                [ SvgAttr.width (String.fromFloat barWidth)
+                , SvgAttr.height (String.fromFloat barHeight)
+                , SvgAttr.style "display: block; margin-top: 2px;"
+                ]
+                (List.indexedMap
+                    (\i contig ->
+                        let
+                            cy = toFloat i * 6 + 5
+                            cWidth = toFloat contig.maxPos / toFloat globalMax * barWidth
+                        in
+                        Svg.line
+                            [ SvgAttr.x1 "0"
                             , SvgAttr.y1 (String.fromFloat cy)
-                            , SvgAttr.x2 (String.fromFloat (scale contig.maxPos))
+                            , SvgAttr.x2 (String.fromFloat cWidth)
                             , SvgAttr.y2 (String.fromFloat cy)
-                            , SvgAttr.stroke "black"
+                            , SvgAttr.stroke "#bbb"
                             , SvgAttr.strokeWidth "3"
                             ]
                             []
-                        ]
-                        ++ List.map (\gene -> renderGeneArrow scale cy gene) contig.genes
-                        )
+                    )
+                    contigs
+                    ++ [ Svg.rect
+                            [ SvgAttr.x (String.fromFloat (viewStart * barWidth))
+                            , SvgAttr.y "0"
+                            , SvgAttr.width (String.fromFloat rectW)
+                            , SvgAttr.height (String.fromFloat barHeight)
+                            , SvgAttr.fill "rgba(66, 133, 244, 0.3)"
+                            , SvgAttr.stroke "#4285f4"
+                            , SvgAttr.strokeWidth "1"
+                            , SvgAttr.rx "2"
+                            ]
+                            []
+                       ]
                 )
-            )
-        ]
+            ]
 
 
 renderGeneArrow : (Int -> Float) -> Float -> EMapperGene -> Svg.Svg Msg
