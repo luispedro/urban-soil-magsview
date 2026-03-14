@@ -68,9 +68,9 @@ div.taxonomy-node-subspecies {
   background-color: #662506;
 }
 
-P.sequence {
+.sequence {
     font-family: monospace;
-    line-break: anywhere;
+    word-break: break-all;
     font-size: 0.9em;
     background-color: #f8f8f8;
     color: #666;

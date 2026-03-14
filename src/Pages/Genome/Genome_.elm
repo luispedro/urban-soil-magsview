@@ -1203,6 +1203,18 @@ renderGeneDetail state =
                 [ geneDetailHeader gene
                 , Html.div []
                     [ Html.h4 [ HtmlAttr.style "margin" "0.5em 0 0.25em 0" ]
+                        [ Html.text "Protein sequence"
+                        , Html.span [ HtmlAttr.style "font-weight" "normal"
+                                    , HtmlAttr.style "font-size" "0.85em"
+                                    , HtmlAttr.style "color" "#666"
+                                    , HtmlAttr.style "margin-left" "0.5em"
+                                    ]
+                            [ Html.text ("(" ++ String.fromInt (String.length seqData.protein) ++ " aa, translation table 11)") ]
+                        ]
+                    , Html.div [ HtmlAttr.class "sequence" ]
+                        (coloredProtein seqData.protein)
+                    , aaLegend
+                    , Html.h4 [ HtmlAttr.style "margin" "0.5em 0 0.25em 0" ]
                         [ Html.text "DNA sequence"
                         , Html.span [ HtmlAttr.style "font-weight" "normal"
                                     , HtmlAttr.style "font-size" "0.85em"
@@ -1213,19 +1225,89 @@ renderGeneDetail state =
                         ]
                     , Html.p [ HtmlAttr.class "sequence" ]
                         [ Html.text seqData.dna ]
-                    , Html.h4 [ HtmlAttr.style "margin" "0.5em 0 0.25em 0" ]
-                        [ Html.text "Protein sequence"
-                        , Html.span [ HtmlAttr.style "font-weight" "normal"
-                                    , HtmlAttr.style "font-size" "0.85em"
-                                    , HtmlAttr.style "color" "#666"
-                                    , HtmlAttr.style "margin-left" "0.5em"
-                                    ]
-                            [ Html.text ("(" ++ String.fromInt (String.length seqData.protein) ++ " aa)") ]
-                        ]
-                    , Html.p [ HtmlAttr.class "sequence" ]
-                        [ Html.text seqData.protein ]
                     ]
                 ]
+
+
+aaGroupColor : Char -> String
+aaGroupColor aa =
+    case aa of
+        -- Nonpolar/hydrophobic
+        'G' -> "#f9e79f"
+        'A' -> "#f9e79f"
+        'V' -> "#f9e79f"
+        'L' -> "#f9e79f"
+        'I' -> "#f9e79f"
+        'P' -> "#f9e79f"
+        'F' -> "#f9e79f"
+        'M' -> "#f9e79f"
+        'W' -> "#f9e79f"
+        -- Polar/uncharged
+        'S' -> "#abebc6"
+        'T' -> "#abebc6"
+        'C' -> "#abebc6"
+        'Y' -> "#abebc6"
+        'N' -> "#abebc6"
+        'Q' -> "#abebc6"
+        -- Positively charged
+        'K' -> "#aed6f1"
+        'R' -> "#aed6f1"
+        'H' -> "#aed6f1"
+        -- Negatively charged
+        'D' -> "#f5b7b1"
+        'E' -> "#f5b7b1"
+        -- Stop
+        '*' -> "#d5d8dc"
+        _ -> "transparent"
+
+
+coloredProtein : String -> List (Html.Html msg)
+coloredProtein protein =
+    protein
+        |> String.toList
+        |> List.map (\aa ->
+            Html.span
+                [ HtmlAttr.style "background-color" (aaGroupColor aa) ]
+                [ Html.text (String.fromChar aa) ]
+        )
+
+
+aaLegend : Html.Html msg
+aaLegend =
+    Html.div
+        [ HtmlAttr.style "display" "flex"
+        , HtmlAttr.style "flex-wrap" "wrap"
+        , HtmlAttr.style "gap" "0.3em 1em"
+        , HtmlAttr.style "font-size" "0.8em"
+        , HtmlAttr.style "margin-top" "0.3em"
+        ]
+        (List.map aaLegendItem
+            [ ("#f9e79f", "Nonpolar (G, A, V, L, I, P, F, M, W)")
+            , ("#abebc6", "Polar (S, T, C, Y, N, Q)")
+            , ("#aed6f1", "Positive (K, R, H)")
+            , ("#f5b7b1", "Negative (D, E)")
+            , ("#d5d8dc", "Stop (*)")
+            ]
+        )
+
+
+aaLegendItem : (String, String) -> Html.Html msg
+aaLegendItem (color, label) =
+    Html.span
+        [ HtmlAttr.style "display" "inline-flex"
+        , HtmlAttr.style "align-items" "center"
+        , HtmlAttr.style "gap" "0.3em"
+        ]
+        [ Html.span
+            [ HtmlAttr.style "display" "inline-block"
+            , HtmlAttr.style "width" "14px"
+            , HtmlAttr.style "height" "14px"
+            , HtmlAttr.style "background-color" color
+            , HtmlAttr.style "border" "1px solid #999"
+            ]
+            []
+        , Html.text label
+        ]
 
 
 geneDetailHeader : EMapperGene -> Html.Html Msg
