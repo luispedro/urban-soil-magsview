@@ -895,7 +895,7 @@ renderGenomeMap zoom offset genes =
                                 ]
                                 []
                             ]
-                            ++ List.map (\gene -> renderGeneArrow scale cy gene) contig.genes
+                            ++ List.map (\gene -> renderGeneArrow zoom scale cy gene) contig.genes
                             )
                     )
                 )
@@ -963,46 +963,63 @@ renderOverviewBar zoom offset contigs globalMax =
             ]
 
 
-renderGeneArrow : (Int -> Float) -> Float -> EMapperGene -> Svg.Svg Msg
-renderGeneArrow scale cy gene =
+renderGeneArrow : Float -> (Int -> Float) -> Float -> EMapperGene -> Svg.Svg Msg
+renderGeneArrow zoom scale cy gene =
     let
         x1 = scale gene.start
         x2 = scale gene.end
         geneWidth = x2 - x1
-        arrowHeadSize = Basics.min 6 (geneWidth * 0.3)
         halfHeight = 8
         color = cogColor (String.left 1 gene.cogCategory)
         tooltipText =
             (if String.isEmpty gene.preferredName then gene.seqid else gene.preferredName)
                 ++ " [" ++ (if String.isEmpty gene.cogCategory then "-" else gene.cogCategory) ++ "]"
-        points =
-            if gene.strand == "+" then
-                -- Arrow pointing right
-                String.join " "
-                    [ p x1 (cy - halfHeight)
-                    , p (x2 - arrowHeadSize) (cy - halfHeight)
-                    , p x2 cy
-                    , p (x2 - arrowHeadSize) (cy + halfHeight)
-                    , p x1 (cy + halfHeight)
-                    ]
-            else
-                -- Arrow pointing left
-                String.join " "
-                    [ p (x1 + arrowHeadSize) (cy - halfHeight)
-                    , p x2 (cy - halfHeight)
-                    , p x2 (cy + halfHeight)
-                    , p (x1 + arrowHeadSize) (cy + halfHeight)
-                    , p x1 cy
-                    ]
+        -- At low zoom, genes are tiny: use colored stroke and rectangles
+        useSimple = zoom < 4
+        strokeColor = if useSimple then color else "#333"
+        strokeW = if useSimple then "0.3" else "0.5"
     in
-    Svg.polygon
-        [ SvgAttr.points points
-        , SvgAttr.fill color
-        , SvgAttr.stroke "#333"
-        , SvgAttr.strokeWidth "0.5"
-        ]
-        [ Svg.title [] [ Svg.text tooltipText ]
-        ]
+    if useSimple then
+        Svg.rect
+            [ SvgAttr.x (String.fromFloat x1)
+            , SvgAttr.y (String.fromFloat (cy - halfHeight))
+            , SvgAttr.width (String.fromFloat (Basics.max 1 geneWidth))
+            , SvgAttr.height (String.fromFloat (halfHeight * 2))
+            , SvgAttr.fill color
+            , SvgAttr.stroke strokeColor
+            , SvgAttr.strokeWidth strokeW
+            ]
+            [ Svg.title [] [ Svg.text tooltipText ]
+            ]
+    else
+        let
+            arrowHeadSize = Basics.min 6 (geneWidth * 0.3)
+            points =
+                if gene.strand == "+" then
+                    String.join " "
+                        [ p x1 (cy - halfHeight)
+                        , p (x2 - arrowHeadSize) (cy - halfHeight)
+                        , p x2 cy
+                        , p (x2 - arrowHeadSize) (cy + halfHeight)
+                        , p x1 (cy + halfHeight)
+                        ]
+                else
+                    String.join " "
+                        [ p (x1 + arrowHeadSize) (cy - halfHeight)
+                        , p x2 (cy - halfHeight)
+                        , p x2 (cy + halfHeight)
+                        , p (x1 + arrowHeadSize) (cy + halfHeight)
+                        , p x1 cy
+                        ]
+        in
+        Svg.polygon
+            [ SvgAttr.points points
+            , SvgAttr.fill color
+            , SvgAttr.stroke strokeColor
+            , SvgAttr.strokeWidth strokeW
+            ]
+            [ Svg.title [] [ Svg.text tooltipText ]
+            ]
 
 
 p : Float -> Float -> String
