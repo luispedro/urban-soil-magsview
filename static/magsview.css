@@ -119,3 +119,12 @@ A.microbeAtlasLink {
     transition: opacity 0.3s ease-in-out; /* smooth transition */
 }
 
+.gene-detail-panel {
+  margin: 0.75em 0;
+  padding: 0.75em 1em;
+  border: 1px solid #ccc;
+  border-left: 4px solid #4285f4;
+  border-radius: 4px;
+  background-color: #fafbfc;
+}
+

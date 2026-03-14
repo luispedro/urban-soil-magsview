@@ -11,9 +11,11 @@ import View exposing (View)
 
 import Http
 import Json.Decode as D
+import Json.Encode as E
 
 import Svg
 import Svg.Attributes as SvgAttr
+import Svg.Events as SvgEvents
 
 import W.InputCheckbox as InputCheckbox
 import Bootstrap.Button as Button
@@ -31,6 +33,7 @@ import Layouts
 import GenomeStats exposing (taxonomyLast, printableTaxonomy, showTaxon)
 import Utils exposing (mkTooltipQuestionMark)
 import Downloads exposing (mkFASTALink, mkENOGLink, mkEMapperSummaryLink)
+import GeneSequence
 
 -- INIT
 
@@ -75,6 +78,17 @@ type EMapperDataModel
     | EMapperError String
     | EMapperWaiting
 
+type alias GeneSequenceData =
+    { dna : String
+    , protein : String
+    }
+
+type GeneSequenceState
+    = NoGeneSelected
+    | GeneSequenceLoading EMapperGene
+    | GeneSequenceLoaded EMapperGene GeneSequenceData
+    | GeneSequenceError EMapperGene String
+
 type alias Model =
     { magdata : LoadedDataModel
     , emapperData : EMapperDataModel
@@ -83,6 +97,8 @@ type alias Model =
     , showARGSequences : Bool
     , genomeMapZoom : Float
     , genomeMapOffset : Float
+    , magId : String
+    , geneSequence : GeneSequenceState
     }
 
 type Msg =
@@ -96,6 +112,9 @@ type Msg =
     | GenomeMapZoomReset
     | GenomeMapScrollLeft
     | GenomeMapScrollRight
+    | GeneClicked EMapperGene
+    | GeneSequenceReceived D.Value
+    | CloseGeneDetail
     | NoMsg
 
 type APIResult =
@@ -126,8 +145,8 @@ decodeMAGData =
         (D.field "ARGs" (D.list decodeARG))
     |> D.map APIResultOK
 
-model0 : Model
-model0 =
+model0 : String -> Model
+model0 magid =
     { magdata = Waiting
     , emapperData = EMapperWaiting
     , expanded = False
@@ -135,6 +154,8 @@ model0 =
     , showARGSequences = False
     , genomeMapZoom = 1.0
     , genomeMapOffset = 0.0
+    , magId = magid
+    , geneSequence = NoGeneSelected
     }
 
 cmd0 : String -> Effect Msg
@@ -157,9 +178,9 @@ cmd0 magid =
 page : Shared.Model -> Route { genome : String } -> Page Model Msg
 page shared route =
     Page.new
-        { init = \_ -> (model0, cmd0 route.params.genome)
+        { init = \_ -> (model0 route.params.genome, cmd0 route.params.genome)
         , update = update
-        , subscriptions = \_ -> Sub.none
+        , subscriptions = \_ -> GeneSequence.receiveGeneSequence GeneSequenceReceived
         , view = view shared route
         }
     |> Page.withLayout (\_ -> Layouts.Main {})
@@ -245,6 +266,56 @@ update msg model =
                 newOffset = clampOffset model.genomeMapZoom (model.genomeMapOffset + step)
             in
             ( { model | genomeMapOffset = newOffset }, Effect.none )
+
+        GeneClicked gene ->
+            ( { model | geneSequence = GeneSequenceLoading gene }
+            , Effect.sendCmd
+                (GeneSequence.requestGeneSequence
+                    (E.object
+                        [ ( "magId", E.string model.magId )
+                        , ( "contig", E.string gene.contig )
+                        , ( "start", E.int gene.start )
+                        , ( "end", E.int gene.end )
+                        , ( "strand", E.string gene.strand )
+                        , ( "seqid", E.string gene.seqid )
+                        ]
+                    )
+                )
+            )
+
+        GeneSequenceReceived value ->
+            let
+                resultDecoder =
+                    D.map2 GeneSequenceData
+                        (D.field "dna" D.string)
+                        (D.field "protein" D.string)
+                newState =
+                    case D.decodeValue resultDecoder value of
+                        Ok seqData ->
+                            case model.geneSequence of
+                                GeneSequenceLoading gene ->
+                                    GeneSequenceLoaded gene seqData
+                                _ ->
+                                    model.geneSequence
+                        Err err ->
+                            case D.decodeValue (D.field "error" D.string) value of
+                                Ok errorMsg ->
+                                    case model.geneSequence of
+                                        GeneSequenceLoading gene ->
+                                            GeneSequenceError gene errorMsg
+                                        _ ->
+                                            model.geneSequence
+                                Err _ ->
+                                    case model.geneSequence of
+                                        GeneSequenceLoading gene ->
+                                            GeneSequenceError gene (D.errorToString err)
+                                        _ ->
+                                            model.geneSequence
+            in
+            ( { model | geneSequence = newState }, Effect.none )
+
+        CloseGeneDetail ->
+            ( { model | geneSequence = NoGeneSelected }, Effect.none )
 
         _ ->
             ( model
@@ -642,6 +713,15 @@ parseTsvLine line =
 
 -- GENOME MAP VISUALIZATION
 
+selectedGeneFromState : GeneSequenceState -> Maybe EMapperGene
+selectedGeneFromState state =
+    case state of
+        NoGeneSelected -> Nothing
+        GeneSequenceLoading gene -> Just gene
+        GeneSequenceLoaded gene _ -> Just gene
+        GeneSequenceError gene _ -> Just gene
+
+
 showGenomeMap : Model -> Html.Html Msg
 showGenomeMap model =
     case model.emapperData of
@@ -656,10 +736,12 @@ showGenomeMap model =
                     |> List.map .maxPos
                     |> List.maximum
                     |> Maybe.withDefault 1
+                selectedGene = selectedGeneFromState model.geneSequence
             in
             Html.div []
                 [ genomeMapControls model globalMax
-                , renderGenomeMap model.genomeMapZoom model.genomeMapOffset genes
+                , renderGenomeMap model.genomeMapZoom model.genomeMapOffset selectedGene genes
+                , renderGeneDetail model.geneSequence
                 , renderCogLegend genes
                 ]
 
@@ -823,8 +905,8 @@ genomeMapLayout =
     }
 
 
-renderGenomeMap : Float -> Float -> List EMapperGene -> Html.Html Msg
-renderGenomeMap zoom offset genes =
+renderGenomeMap : Float -> Float -> Maybe EMapperGene -> List EMapperGene -> Html.Html Msg
+renderGenomeMap zoom offset selectedGene genes =
     let
         lay = genomeMapLayout
         contigs = groupByContig genes
@@ -898,7 +980,7 @@ renderGenomeMap zoom offset genes =
                                 ]
                                 []
                             ]
-                            ++ List.map (\gene -> renderGeneArrow useArrows scale cy gene) contig.genes
+                            ++ List.map (\gene -> renderGeneArrow useArrows scale cy selectedGene gene) contig.genes
                             )
                     )
                 )
@@ -966,8 +1048,8 @@ renderOverviewBar zoom offset contigs globalMax =
             ]
 
 
-renderGeneArrow : Bool -> (Int -> Float) -> Float -> EMapperGene -> Svg.Svg Msg
-renderGeneArrow useArrows scale cy gene =
+renderGeneArrow : Bool -> (Int -> Float) -> Float -> Maybe EMapperGene -> EMapperGene -> Svg.Svg Msg
+renderGeneArrow useArrows scale cy selectedGene gene =
     let
         x1 = scale gene.start
         x2 = scale gene.end
@@ -977,8 +1059,13 @@ renderGeneArrow useArrows scale cy gene =
         tooltipText =
             (if String.isEmpty gene.preferredName then gene.seqid else gene.preferredName)
                 ++ " [" ++ (if String.isEmpty gene.cogCategory then "-" else gene.cogCategory) ++ "]"
-        strokeColor = if useArrows then "#333" else color
-        strokeW = if useArrows then "0.5" else "0.3"
+        isSelected = case selectedGene of
+            Just sel -> sel.seqid == gene.seqid
+            Nothing -> False
+        strokeColor = if isSelected then "#000" else if useArrows then "#333" else color
+        strokeW = if isSelected then "2" else if useArrows then "0.5" else "0.3"
+        clickHandler = SvgEvents.onClick (GeneClicked gene)
+        cursorStyle = SvgAttr.style "cursor: pointer;"
     in
     if not useArrows then
         Svg.rect
@@ -989,6 +1076,8 @@ renderGeneArrow useArrows scale cy gene =
             , SvgAttr.fill color
             , SvgAttr.stroke strokeColor
             , SvgAttr.strokeWidth strokeW
+            , clickHandler
+            , cursorStyle
             ]
             [ Svg.title [] [ Svg.text tooltipText ]
             ]
@@ -1018,6 +1107,8 @@ renderGeneArrow useArrows scale cy gene =
             , SvgAttr.fill color
             , SvgAttr.stroke strokeColor
             , SvgAttr.strokeWidth strokeW
+            , clickHandler
+            , cursorStyle
             ]
             [ Svg.title [] [ Svg.text tooltipText ]
             ]
@@ -1086,6 +1177,91 @@ cogDescription cat =
         "S" -> "Function unknown"
         "" -> "No COG category"
         _ -> cat
+
+
+renderGeneDetail : GeneSequenceState -> Html.Html Msg
+renderGeneDetail state =
+    case state of
+        NoGeneSelected ->
+            Html.text ""
+
+        GeneSequenceLoading gene ->
+            Html.div [ HtmlAttr.class "gene-detail-panel" ]
+                [ geneDetailHeader gene
+                , Html.p [] [ Html.text "Loading sequence..." ]
+                ]
+
+        GeneSequenceError gene errMsg ->
+            Html.div [ HtmlAttr.class "gene-detail-panel" ]
+                [ geneDetailHeader gene
+                , Html.p [ HtmlAttr.style "color" "#c00" ]
+                    [ Html.text ("Error: " ++ errMsg) ]
+                ]
+
+        GeneSequenceLoaded gene seqData ->
+            Html.div [ HtmlAttr.class "gene-detail-panel" ]
+                [ geneDetailHeader gene
+                , Html.div []
+                    [ Html.h4 [ HtmlAttr.style "margin" "0.5em 0 0.25em 0" ]
+                        [ Html.text "DNA sequence"
+                        , Html.span [ HtmlAttr.style "font-weight" "normal"
+                                    , HtmlAttr.style "font-size" "0.85em"
+                                    , HtmlAttr.style "color" "#666"
+                                    , HtmlAttr.style "margin-left" "0.5em"
+                                    ]
+                            [ Html.text ("(" ++ String.fromInt (String.length seqData.dna) ++ " bp)") ]
+                        ]
+                    , Html.p [ HtmlAttr.class "sequence" ]
+                        [ Html.text seqData.dna ]
+                    , Html.h4 [ HtmlAttr.style "margin" "0.5em 0 0.25em 0" ]
+                        [ Html.text "Protein sequence"
+                        , Html.span [ HtmlAttr.style "font-weight" "normal"
+                                    , HtmlAttr.style "font-size" "0.85em"
+                                    , HtmlAttr.style "color" "#666"
+                                    , HtmlAttr.style "margin-left" "0.5em"
+                                    ]
+                            [ Html.text ("(" ++ String.fromInt (String.length seqData.protein) ++ " aa)") ]
+                        ]
+                    , Html.p [ HtmlAttr.class "sequence" ]
+                        [ Html.text seqData.protein ]
+                    ]
+                ]
+
+
+geneDetailHeader : EMapperGene -> Html.Html Msg
+geneDetailHeader gene =
+    Html.div [ HtmlAttr.style "display" "flex"
+             , HtmlAttr.style "justify-content" "space-between"
+             , HtmlAttr.style "align-items" "center"
+             ]
+        [ Html.h3 [ HtmlAttr.style "margin" "0" ]
+            [ Html.text
+                (if String.isEmpty gene.preferredName
+                    then gene.seqid
+                    else gene.preferredName ++ " (" ++ gene.seqid ++ ")"
+                )
+            ]
+        , Html.span [ HtmlAttr.style "font-size" "0.85em"
+                    , HtmlAttr.style "color" "#666"
+                    , HtmlAttr.style "margin-left" "1em"
+                    ]
+            [ Html.text (gene.contig
+                ++ " : " ++ String.fromInt gene.start
+                ++ "-" ++ String.fromInt gene.end
+                ++ " [" ++ gene.strand ++ "]"
+                )
+            ]
+        , Html.button
+            [ HE.onClick CloseGeneDetail
+            , HtmlAttr.style "border" "none"
+            , HtmlAttr.style "background" "none"
+            , HtmlAttr.style "font-size" "1.2em"
+            , HtmlAttr.style "cursor" "pointer"
+            , HtmlAttr.style "color" "#666"
+            , HtmlAttr.style "padding" "0.2em 0.5em"
+            ]
+            [ Html.text "\u{2715}" ]
+        ]
 
 
 renderCogLegend : List EMapperGene -> Html.Html Msg
