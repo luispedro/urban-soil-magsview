@@ -66,6 +66,8 @@ type alias EMapperGene =
     , strand : String
     , cogCategory : String
     , preferredName : String
+    , keggKo : List String
+    , keggModule : List String
     }
 
 type LoadedDataModel =
@@ -702,10 +704,23 @@ parseEMapperTsv tsv =
 
 parseTsvLine : String -> Maybe EMapperGene
 parseTsvLine line =
+    let
+        splitCommas s =
+            if s == "-" then []
+            else String.split "," s
+    in
     case String.split "\t" line of
-        seqid :: contig :: startStr :: endStr :: strand :: cogCat :: prefName :: _ ->
+        seqid :: contig :: startStr :: endStr :: strand :: cogCat :: prefName :: rest ->
             case ( String.toInt startStr, String.toInt endStr ) of
                 ( Just start, Just end ) ->
+                    let
+                        keggKo = case rest of
+                            ko :: _ -> splitCommas ko
+                            _ -> []
+                        keggModule = case rest of
+                            _ :: km :: _ -> splitCommas km
+                            _ -> []
+                    in
                     Just
                         { seqid = seqid
                         , contig = contig
@@ -714,6 +729,8 @@ parseTsvLine line =
                         , strand = strand
                         , cogCategory = if cogCat == "-" then "" else cogCat
                         , preferredName = if prefName == "-" then "" else prefName
+                        , keggKo = keggKo
+                        , keggModule = keggModule
                         }
                 _ -> Nothing
         _ -> Nothing
@@ -1196,12 +1213,14 @@ renderGeneDetail state =
         GeneSequenceLoading gene ->
             Html.div [ HtmlAttr.class "gene-detail-panel" ]
                 [ geneDetailHeader gene
+                , geneAnnotationInfo gene
                 , Html.p [] [ Html.text "Loading sequence..." ]
                 ]
 
         GeneSequenceError gene errMsg ->
             Html.div [ HtmlAttr.class "gene-detail-panel" ]
                 [ geneDetailHeader gene
+                , geneAnnotationInfo gene
                 , Html.p [ HtmlAttr.style "color" "#c00" ]
                     [ Html.text ("Error: " ++ errMsg) ]
                 ]
@@ -1209,6 +1228,7 @@ renderGeneDetail state =
         GeneSequenceLoaded gene seqData ->
             Html.div [ HtmlAttr.class "gene-detail-panel" ]
                 [ geneDetailHeader gene
+                , geneAnnotationInfo gene
                 , Html.div []
                     [ Html.div [ HtmlAttr.style "display" "flex"
                                , HtmlAttr.style "align-items" "baseline"
@@ -1328,6 +1348,73 @@ aaLegendItem (color, label) =
             []
         , Html.text label
         ]
+
+
+geneAnnotationInfo : EMapperGene -> Html.Html Msg
+geneAnnotationInfo gene =
+    let
+        row label content =
+            Html.tr []
+                [ Html.td [ HtmlAttr.style "padding" "0.15em 0.75em 0.15em 0"
+                           , HtmlAttr.style "color" "#666"
+                           , HtmlAttr.style "vertical-align" "top"
+                           , HtmlAttr.style "white-space" "nowrap"
+                           ]
+                    [ Html.text label ]
+                , Html.td [ HtmlAttr.style "padding" "0.15em 0" ]
+                    content
+                ]
+        cogRow =
+            if String.isEmpty gene.cogCategory then
+                []
+            else
+                [ row "COG category"
+                    [ Html.text (gene.cogCategory ++ " — " ++ cogDescription (String.left 1 gene.cogCategory)) ]
+                ]
+        keggKoRow =
+            if List.isEmpty gene.keggKo then
+                []
+            else
+                [ row "KEGG orthology"
+                    (List.intersperse (Html.text ", ")
+                        (List.map keggKoLink gene.keggKo))
+                ]
+        keggModuleRow =
+            if List.isEmpty gene.keggModule then
+                []
+            else
+                [ row "KEGG module"
+                    (List.intersperse (Html.text ", ")
+                        (List.map keggModuleLink gene.keggModule))
+                ]
+        rows = cogRow ++ keggKoRow ++ keggModuleRow
+    in
+    if List.isEmpty rows then
+        Html.text ""
+    else
+        Html.table [ HtmlAttr.style "margin" "0.5em 0"
+                   , HtmlAttr.style "font-size" "0.9em"
+                   ]
+            [ Html.tbody [] rows ]
+
+
+keggKoLink : String -> Html.Html msg
+keggKoLink ko =
+    let
+        koId = String.replace "ko:" "" ko
+    in
+    Html.a [ HtmlAttr.href ("https://www.genome.jp/dbget-bin/www_bget?" ++ koId)
+           , HtmlAttr.target "_blank"
+           ]
+        [ Html.text ko ]
+
+
+keggModuleLink : String -> Html.Html msg
+keggModuleLink m =
+    Html.a [ HtmlAttr.href ("https://www.genome.jp/dbget-bin/www_bget?" ++ m)
+           , HtmlAttr.target "_blank"
+           ]
+        [ Html.text m ]
 
 
 copyButton : String -> String -> Html.Html Msg
