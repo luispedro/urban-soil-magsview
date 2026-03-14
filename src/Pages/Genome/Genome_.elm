@@ -839,6 +839,9 @@ renderGenomeMap zoom offset genes =
         vbX = offset * (virtualWidth - lay.mapWidth)
         -- Scale maps genome position to virtual x coordinate (0 .. virtualWidth)
         scale pos = toFloat pos / toFloat globalMax * virtualWidth
+        -- Show arrows only when the visible region is small enough
+        visibleBp = toFloat globalMax / zoom
+        useArrows = visibleBp < 500000
     in
     Html.div []
         [ Html.div
@@ -895,7 +898,7 @@ renderGenomeMap zoom offset genes =
                                 ]
                                 []
                             ]
-                            ++ List.map (\gene -> renderGeneArrow zoom scale cy gene) contig.genes
+                            ++ List.map (\gene -> renderGeneArrow useArrows scale cy gene) contig.genes
                             )
                     )
                 )
@@ -963,8 +966,8 @@ renderOverviewBar zoom offset contigs globalMax =
             ]
 
 
-renderGeneArrow : Float -> (Int -> Float) -> Float -> EMapperGene -> Svg.Svg Msg
-renderGeneArrow zoom scale cy gene =
+renderGeneArrow : Bool -> (Int -> Float) -> Float -> EMapperGene -> Svg.Svg Msg
+renderGeneArrow useArrows scale cy gene =
     let
         x1 = scale gene.start
         x2 = scale gene.end
@@ -974,12 +977,10 @@ renderGeneArrow zoom scale cy gene =
         tooltipText =
             (if String.isEmpty gene.preferredName then gene.seqid else gene.preferredName)
                 ++ " [" ++ (if String.isEmpty gene.cogCategory then "-" else gene.cogCategory) ++ "]"
-        -- At low zoom, genes are tiny: use colored stroke and rectangles
-        useSimple = zoom < 4
-        strokeColor = if useSimple then color else "#333"
-        strokeW = if useSimple then "0.3" else "0.5"
+        strokeColor = if useArrows then "#333" else color
+        strokeW = if useArrows then "0.5" else "0.3"
     in
-    if useSimple then
+    if not useArrows then
         Svg.rect
             [ SvgAttr.x (String.fromFloat x1)
             , SvgAttr.y (String.fromFloat (cy - halfHeight))
