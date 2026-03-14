@@ -119,6 +119,30 @@ A.microbeAtlasLink {
     transition: opacity 0.3s ease-in-out; /* smooth transition */
 }
 
+.copy-btn {
+  border: 1px solid #ccc;
+  background: #fff;
+  font-size: 1em;
+  cursor: pointer;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  transition: background-color 0.2s, transform 0.1s;
+}
+
+.copy-btn:hover {
+  background-color: #e8e8e8;
+}
+
+.copy-btn:active {
+  transform: scale(0.92);
+}
+
+.copy-btn-copied {
+  background-color: #d4edda;
+  border-color: #28a745;
+  color: #28a745;
+}
+
 .gene-detail-panel {
   margin: 0.75em 0;
   padding: 0.75em 1em;

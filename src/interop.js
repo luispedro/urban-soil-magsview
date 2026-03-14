@@ -128,6 +128,21 @@ export const onReady = ({ app, env }) => {
       gtag('send', 'pageview');
   });
 
+  app.ports.copyToClipboard.subscribe(function(args) {
+    const { text, buttonId } = args;
+    navigator.clipboard.writeText(text).then(function() {
+      const btn = document.getElementById(buttonId);
+      if (btn) {
+        btn.textContent = '\u2713';
+        btn.classList.add('copy-btn-copied');
+        setTimeout(function() {
+          btn.textContent = '\u{1F4CB}';
+          btn.classList.remove('copy-btn-copied');
+        }, 1500);
+      }
+    });
+  });
+
   app.ports.requestGeneSequence.subscribe(async function(request) {
     try {
       const { magId, contig, start, end, strand, seqid } = request;

@@ -115,6 +115,7 @@ type Msg =
     | GeneClicked EMapperGene
     | GeneSequenceReceived D.Value
     | CloseGeneDetail
+    | CopyToClipboard String String
     | NoMsg
 
 type APIResult =
@@ -316,6 +317,13 @@ update msg model =
 
         CloseGeneDetail ->
             ( { model | geneSequence = NoGeneSelected }, Effect.none )
+
+        CopyToClipboard text buttonId ->
+            ( model, Effect.sendCmd (GeneSequence.copyToClipboard
+                (E.object
+                    [ ("text", E.string text)
+                    , ("buttonId", E.string buttonId)
+                    ])) )
 
         _ ->
             ( model
@@ -1202,26 +1210,38 @@ renderGeneDetail state =
             Html.div [ HtmlAttr.class "gene-detail-panel" ]
                 [ geneDetailHeader gene
                 , Html.div []
-                    [ Html.h4 [ HtmlAttr.style "margin" "0.5em 0 0.25em 0" ]
-                        [ Html.text "Protein sequence"
-                        , Html.span [ HtmlAttr.style "font-weight" "normal"
-                                    , HtmlAttr.style "font-size" "0.85em"
-                                    , HtmlAttr.style "color" "#666"
-                                    , HtmlAttr.style "margin-left" "0.5em"
-                                    ]
-                            [ Html.text ("(" ++ String.fromInt (String.length seqData.protein) ++ " aa, translation table 11)") ]
+                    [ Html.div [ HtmlAttr.style "display" "flex"
+                               , HtmlAttr.style "align-items" "baseline"
+                               , HtmlAttr.style "gap" "0.5em"
+                               ]
+                        [ Html.h4 [ HtmlAttr.style "margin" "0.5em 0 0.25em 0" ]
+                            [ Html.text "Protein sequence"
+                            , Html.span [ HtmlAttr.style "font-weight" "normal"
+                                        , HtmlAttr.style "font-size" "0.85em"
+                                        , HtmlAttr.style "color" "#666"
+                                        , HtmlAttr.style "margin-left" "0.5em"
+                                        ]
+                                [ Html.text ("(" ++ String.fromInt (String.length seqData.protein) ++ " aa, translation table 11)") ]
+                            ]
+                        , copyButton "copy-protein" seqData.protein
                         ]
                     , Html.div [ HtmlAttr.class "sequence" ]
                         (coloredProtein seqData.protein)
                     , aaLegend
-                    , Html.h4 [ HtmlAttr.style "margin" "0.5em 0 0.25em 0" ]
-                        [ Html.text "DNA sequence"
-                        , Html.span [ HtmlAttr.style "font-weight" "normal"
-                                    , HtmlAttr.style "font-size" "0.85em"
-                                    , HtmlAttr.style "color" "#666"
-                                    , HtmlAttr.style "margin-left" "0.5em"
-                                    ]
-                            [ Html.text ("(" ++ String.fromInt (String.length seqData.dna) ++ " bp)") ]
+                    , Html.div [ HtmlAttr.style "display" "flex"
+                               , HtmlAttr.style "align-items" "baseline"
+                               , HtmlAttr.style "gap" "0.5em"
+                               ]
+                        [ Html.h4 [ HtmlAttr.style "margin" "0.5em 0 0.25em 0" ]
+                            [ Html.text "DNA sequence"
+                            , Html.span [ HtmlAttr.style "font-weight" "normal"
+                                        , HtmlAttr.style "font-size" "0.85em"
+                                        , HtmlAttr.style "color" "#666"
+                                        , HtmlAttr.style "margin-left" "0.5em"
+                                        ]
+                                [ Html.text ("(" ++ String.fromInt (String.length seqData.dna) ++ " bp)") ]
+                            ]
+                        , copyButton "copy-dna" seqData.dna
                         ]
                     , Html.p [ HtmlAttr.class "sequence" ]
                         [ Html.text seqData.dna ]
@@ -1308,6 +1328,16 @@ aaLegendItem (color, label) =
             []
         , Html.text label
         ]
+
+
+copyButton : String -> String -> Html.Html Msg
+copyButton buttonId text =
+    Html.button
+        [ HtmlAttr.id buttonId
+        , HE.onClick (CopyToClipboard text buttonId)
+        , HtmlAttr.class "copy-btn"
+        ]
+        [ Html.text "\u{1F4CB}" ]
 
 
 geneDetailHeader : EMapperGene -> Html.Html Msg
