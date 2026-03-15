@@ -102,6 +102,7 @@ type alias Model =
     , magId : String
     , geneSequence : GeneSequenceState
     , showGeneTable : Bool
+    , showDnaSequence : Bool
     }
 
 type Msg =
@@ -120,6 +121,7 @@ type Msg =
     | CloseGeneDetail
     | CopyToClipboard String String
     | ToggleGeneTable
+    | ToggleDnaSequence
     | NoMsg
 
 type APIResult =
@@ -162,6 +164,7 @@ model0 magid =
     , magId = magid
     , geneSequence = NoGeneSelected
     , showGeneTable = False
+    , showDnaSequence = False
     }
 
 cmd0 : String -> Effect Msg
@@ -275,6 +278,9 @@ update msg model =
 
         ToggleGeneTable ->
             ( { model | showGeneTable = not model.showGeneTable }, Effect.none )
+
+        ToggleDnaSequence ->
+            ( { model | showDnaSequence = not model.showDnaSequence }, Effect.none )
 
         GeneClicked gene ->
             ( { model | geneSequence = GeneSequenceLoading gene }
@@ -772,7 +778,7 @@ showGenomeMap model =
             Html.div []
                 [ genomeMapControls model globalMax
                 , renderGenomeMap model.genomeMapZoom model.genomeMapOffset selectedGene genes
-                , renderGeneDetail model.geneSequence
+                , renderGeneDetail model.showDnaSequence model.geneSequence
                 , renderCogLegend genes
                 , Html.div [ HtmlAttr.style "margin-top" "1em" ]
                     [ Html.button
@@ -1241,8 +1247,8 @@ cogDescription cat =
         _ -> cat
 
 
-renderGeneDetail : GeneSequenceState -> Html.Html Msg
-renderGeneDetail state =
+renderGeneDetail : Bool -> GeneSequenceState -> Html.Html Msg
+renderGeneDetail showDna state =
     case state of
         NoGeneSelected ->
             Html.text ""
@@ -1289,8 +1295,12 @@ renderGeneDetail state =
                                , HtmlAttr.style "align-items" "baseline"
                                , HtmlAttr.style "gap" "0.5em"
                                ]
-                        [ Html.h4 [ HtmlAttr.style "margin" "0.5em 0 0.25em 0" ]
-                            [ Html.text "DNA sequence"
+                        [ Html.h4 [ HtmlAttr.style "margin" "0.5em 0 0.25em 0"
+                                  , HtmlAttr.style "cursor" "pointer"
+                                  , HE.onClick ToggleDnaSequence
+                                  ]
+                            [ Html.text (if showDna then "\u{25BC} " else "\u{25B6} ")
+                            , Html.text "DNA sequence"
                             , Html.span [ HtmlAttr.style "font-weight" "normal"
                                         , HtmlAttr.style "font-size" "0.85em"
                                         , HtmlAttr.style "color" "#666"
@@ -1298,10 +1308,13 @@ renderGeneDetail state =
                                         ]
                                 [ Html.text ("(" ++ showWithCommas (String.length seqData.dna) ++ " bp)") ]
                             ]
-                        , copyButton "copy-dna" seqData.dna
+                        , if showDna then copyButton "copy-dna" seqData.dna else Html.text ""
                         ]
-                    , Html.p [ HtmlAttr.class "sequence" ]
-                        [ Html.text seqData.dna ]
+                    , if showDna then
+                        Html.p [ HtmlAttr.class "sequence" ]
+                            [ Html.text seqData.dna ]
+                      else
+                        Html.text ""
                     ]
                 ]
 
