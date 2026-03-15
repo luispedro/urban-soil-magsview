@@ -782,7 +782,7 @@ showGenomeMap model =
                         [ Html.text
                             (if model.showGeneTable
                                 then "Hide gene table"
-                                else "Show all genes in table"
+                                else "Show all genes"
                             )
                         ]
                     ]
