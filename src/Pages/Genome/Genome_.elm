@@ -778,7 +778,7 @@ showGenomeMap model =
             Html.div []
                 [ genomeMapControls model globalMax
                 , renderGenomeMap model.genomeMapZoom model.genomeMapOffset selectedGene genes
-                , renderGeneDetail model.showDnaSequence model.geneSequence
+                , renderGeneDetail model.showDnaSequence genes model.geneSequence
                 , renderCogLegend genes
                 , Html.div [ HtmlAttr.style "margin-top" "1em" ]
                     [ Html.button
@@ -1247,8 +1247,62 @@ cogDescription cat =
         _ -> cat
 
 
-renderGeneDetail : Bool -> GeneSequenceState -> Html.Html Msg
-renderGeneDetail showDna state =
+renderLocalNeighborhood : EMapperGene -> List EMapperGene -> Html.Html Msg
+renderLocalNeighborhood gene allGenes =
+    let
+        flank = 10000
+        regionStart = Basics.max 0 (Basics.min gene.start gene.end - flank)
+        regionEnd = Basics.max gene.start gene.end + flank
+        -- Clamp to contig extent
+        contigGenes = List.filter (\g -> g.contig == gene.contig) allGenes
+        contigMax = contigGenes
+            |> List.map (\g -> Basics.max g.start g.end)
+            |> List.maximum
+            |> Maybe.withDefault regionEnd
+        clampedEnd = Basics.min regionEnd contigMax
+        clampedStart = Basics.max 0 regionStart
+        regionLen = toFloat (clampedEnd - clampedStart)
+        -- Genes overlapping the visible region
+        neighborGenes = contigGenes
+            |> List.filter (\g ->
+                let
+                    gMin = Basics.min g.start g.end
+                    gMax = Basics.max g.start g.end
+                in
+                gMax >= clampedStart && gMin <= clampedEnd
+            )
+        lay = genomeMapLayout
+        mapWidth = lay.mapWidth + lay.labelWidth
+        rowHeight = lay.rowHeight
+        cy = toFloat rowHeight / 2 + 5
+        scale pos = (toFloat pos - toFloat clampedStart) / regionLen * mapWidth
+    in
+    Html.div [ HtmlAttr.style "margin" "0.5em 0" ]
+        [ Html.h4 [ HtmlAttr.style "margin" "0.25em 0" ]
+            [ Html.text "Local neighborhood" ]
+        , Svg.svg
+            [ SvgAttr.width (String.fromFloat mapWidth)
+            , SvgAttr.height (String.fromInt (rowHeight + 10))
+            , SvgAttr.viewBox ("0 0 " ++ String.fromFloat mapWidth ++ " " ++ String.fromInt (rowHeight + 10))
+            , SvgAttr.style "font-family: sans-serif; font-size: 11px; display: block;"
+            ]
+            ([ Svg.line
+                [ SvgAttr.x1 (String.fromFloat (scale clampedStart))
+                , SvgAttr.y1 (String.fromFloat cy)
+                , SvgAttr.x2 (String.fromFloat (scale clampedEnd))
+                , SvgAttr.y2 (String.fromFloat cy)
+                , SvgAttr.stroke "black"
+                , SvgAttr.strokeWidth "3"
+                ]
+                []
+             ]
+             ++ List.map (\g -> renderGeneArrow True scale cy (Just gene) g) neighborGenes
+            )
+        ]
+
+
+renderGeneDetail : Bool -> List EMapperGene -> GeneSequenceState -> Html.Html Msg
+renderGeneDetail showDna allGenes state =
     case state of
         NoGeneSelected ->
             Html.text ""
@@ -1256,6 +1310,7 @@ renderGeneDetail showDna state =
         GeneSequenceLoading gene ->
             Html.div [ HtmlAttr.class "gene-detail-panel" ]
                 [ geneDetailHeader gene
+                , renderLocalNeighborhood gene allGenes
                 , geneAnnotationInfo gene
                 , Html.p [] [ Html.text "Loading sequence..." ]
                 ]
@@ -1263,6 +1318,7 @@ renderGeneDetail showDna state =
         GeneSequenceError gene errMsg ->
             Html.div [ HtmlAttr.class "gene-detail-panel" ]
                 [ geneDetailHeader gene
+                , renderLocalNeighborhood gene allGenes
                 , geneAnnotationInfo gene
                 , Html.p [ HtmlAttr.style "color" "#c00" ]
                     [ Html.text ("Error: " ++ errMsg) ]
@@ -1271,6 +1327,7 @@ renderGeneDetail showDna state =
         GeneSequenceLoaded gene seqData ->
             Html.div [ HtmlAttr.class "gene-detail-panel" ]
                 [ geneDetailHeader gene
+                , renderLocalNeighborhood gene allGenes
                 , geneAnnotationInfo gene
                 , Html.div []
                     [ Html.div [ HtmlAttr.style "display" "flex"
