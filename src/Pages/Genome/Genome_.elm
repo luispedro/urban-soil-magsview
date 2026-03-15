@@ -101,6 +101,7 @@ type alias Model =
     , genomeMapOffset : Float
     , magId : String
     , geneSequence : GeneSequenceState
+    , showGeneTable : Bool
     }
 
 type Msg =
@@ -118,6 +119,7 @@ type Msg =
     | GeneSequenceReceived D.Value
     | CloseGeneDetail
     | CopyToClipboard String String
+    | ToggleGeneTable
     | NoMsg
 
 type APIResult =
@@ -159,6 +161,7 @@ model0 magid =
     , genomeMapOffset = 0.0
     , magId = magid
     , geneSequence = NoGeneSelected
+    , showGeneTable = False
     }
 
 cmd0 : String -> Effect Msg
@@ -269,6 +272,9 @@ update msg model =
                 newOffset = clampOffset model.genomeMapZoom (model.genomeMapOffset + step)
             in
             ( { model | genomeMapOffset = newOffset }, Effect.none )
+
+        ToggleGeneTable ->
+            ( { model | showGeneTable = not model.showGeneTable }, Effect.none )
 
         GeneClicked gene ->
             ( { model | geneSequence = GeneSequenceLoading gene }
@@ -768,6 +774,37 @@ showGenomeMap model =
                 , renderGenomeMap model.genomeMapZoom model.genomeMapOffset selectedGene genes
                 , renderGeneDetail model.geneSequence
                 , renderCogLegend genes
+                , Html.div [ HtmlAttr.style "margin-top" "1em" ]
+                    [ Html.button
+                        [ HE.onClick ToggleGeneTable
+                        , HtmlAttr.class "btn btn-outline-secondary btn-sm"
+                        ]
+                        [ Html.text
+                            (if model.showGeneTable
+                                then "Hide gene table"
+                                else "Show all genes in table"
+                            )
+                        ]
+                    ]
+                , if model.showGeneTable
+                    then renderGeneTable genes
+                    else Html.text ""
+                , Html.p [ HtmlAttr.style "margin-top" "1em"
+                         , HtmlAttr.style "font-size" "0.9em"
+                         , HtmlAttr.style "color" "#666"
+                         ]
+                    [ Html.text "Gene predictions and functional annotations were generated using "
+                    , Html.a [ HtmlAttr.href "https://github.com/eggnogdb/eggnog-mapper"
+                             , HtmlAttr.target "_blank"
+                             ]
+                        [ Html.text "eggNOG-mapper" ]
+                    , Html.text " ("
+                    , Html.a [ HtmlAttr.href "https://doi.org/10.1093/molbev/msab293"
+                             , HtmlAttr.target "_blank"
+                             ]
+                        [ Html.text "Cantalapiedra et al., 2021" ]
+                    , Html.text ")."
+                    ]
                 ]
 
 
@@ -1460,6 +1497,74 @@ geneDetailHeader gene =
             , HtmlAttr.style "padding" "0.2em 0.5em"
             ]
             [ Html.text "\u{2715}" ]
+        ]
+
+
+renderGeneTable : List EMapperGene -> Html.Html Msg
+renderGeneTable genes =
+    Html.div [ HtmlAttr.style "margin-top" "1em"
+             , HtmlAttr.style "max-height" "600px"
+             , HtmlAttr.style "overflow-y" "auto"
+             ]
+        [ Html.table [ HtmlAttr.class "table table-sm table-striped"
+                     , HtmlAttr.style "font-size" "0.85em"
+                     ]
+            [ Html.thead []
+                [ Html.tr []
+                    [ Html.th [] [ Html.text "Gene ID" ]
+                    , Html.th [] [ Html.text "Contig" ]
+                    , Html.th [] [ Html.text "Start" ]
+                    , Html.th [] [ Html.text "End" ]
+                    , Html.th [] [ Html.text "Strand" ]
+                    , Html.th [] [ Html.text "Size (bp)" ]
+                    , Html.th [] [ Html.text "Gene name" ]
+                    , Html.th [] [ Html.text "COG" ]
+                    , Html.th [] [ Html.text "KEGG KO" ]
+                    , Html.th [] [ Html.text "KEGG Module" ]
+                    ]
+                ]
+            , Html.tbody []
+                (genes |> List.map (\gene ->
+                    Html.tr []
+                        [ Html.td [] [ Html.text gene.seqid ]
+                        , Html.td [] [ Html.text gene.contig ]
+                        , Html.td [ HtmlAttr.style "text-align" "right" ] [ Html.text (showWithCommas gene.start) ]
+                        , Html.td [ HtmlAttr.style "text-align" "right" ] [ Html.text (showWithCommas gene.end) ]
+                        , Html.td [] [ Html.text gene.strand ]
+                        , Html.td [ HtmlAttr.style "text-align" "right" ] [ Html.text (showWithCommas (gene.end - gene.start + 1)) ]
+                        , Html.td []
+                            [ Html.text
+                                (if String.isEmpty gene.preferredName
+                                    then "-"
+                                    else gene.preferredName
+                                )
+                            ]
+                        , Html.td []
+                            [ Html.span [ HtmlAttr.style "color" (cogColor (String.left 1 gene.cogCategory)) ]
+                                [ Html.text
+                                    (if String.isEmpty gene.cogCategory
+                                        then "-"
+                                        else gene.cogCategory
+                                    )
+                                ]
+                            ]
+                        , Html.td []
+                            (if List.isEmpty gene.keggKo
+                                then [ Html.text "-" ]
+                                else gene.keggKo
+                                    |> List.map keggKoLink
+                                    |> List.intersperse (Html.text ", ")
+                            )
+                        , Html.td []
+                            (if List.isEmpty gene.keggModule
+                                then [ Html.text "-" ]
+                                else gene.keggModule
+                                    |> List.map keggModuleLink
+                                    |> List.intersperse (Html.text ", ")
+                            )
+                        ]
+                ))
+            ]
         ]
 
 
