@@ -122,6 +122,7 @@ type Msg =
     | CopyToClipboard String String
     | ToggleGeneTable
     | ToggleDnaSequence
+    | DownloadGeneFasta String
     | NoMsg
 
 type APIResult =
@@ -281,6 +282,23 @@ update msg model =
 
         ToggleDnaSequence ->
             ( { model | showDnaSequence = not model.showDnaSequence }, Effect.none )
+
+        DownloadGeneFasta format ->
+            case model.emapperData of
+                EMapperLoaded genes ->
+                    ( model
+                    , Effect.sendCmd
+                        (GeneSequence.downloadGeneFasta
+                            (E.object
+                                [ ( "magId", E.string model.magId )
+                                , ( "format", E.string format )
+                                , ( "genes", E.list encodeGeneForDownload genes )
+                                ]
+                            )
+                        )
+                    )
+                _ ->
+                    ( model, Effect.none )
 
         GeneClicked gene ->
             ( { model | geneSequence = GeneSequenceLoading gene }
@@ -522,6 +540,28 @@ showMag model mag =
                 ]
             , Html.li []
                 [ Html.text "RGI predictions (antibiotic resistance genes)" ]
+            , Html.li []
+                [ Html.a
+                    [ HtmlAttr.href "#"
+                    , HE.onClick (DownloadGeneFasta "faa")
+                    ]
+                    [ Html.text "Predicted protein sequences (FAA)" ]
+                , case model.emapperData of
+                    EMapperLoaded _ -> Html.text ""
+                    EMapperWaiting -> Html.text " (loading gene data...)"
+                    EMapperError _ -> Html.text " (gene data unavailable)"
+                ]
+            , Html.li []
+                [ Html.a
+                    [ HtmlAttr.href "#"
+                    , HE.onClick (DownloadGeneFasta "fna")
+                    ]
+                    [ Html.text "Predicted gene nucleotide sequences (FNA)" ]
+                , case model.emapperData of
+                    EMapperLoaded _ -> Html.text ""
+                    EMapperWaiting -> Html.text " (loading gene data...)"
+                    EMapperError _ -> Html.text " (gene data unavailable)"
+                ]
             ]
         ]]
     ]
@@ -695,6 +735,20 @@ showARGs model mag =
                     ]
 
 -- EMAPPER TSV PARSING
+
+encodeGeneForDownload : EMapperGene -> E.Value
+encodeGeneForDownload gene =
+    E.object
+        [ ( "seqid", E.string gene.seqid )
+        , ( "contig", E.string gene.contig )
+        , ( "start", E.int gene.start )
+        , ( "end", E.int gene.end )
+        , ( "strand", E.string gene.strand )
+        , ( "cogCategory", E.string gene.cogCategory )
+        , ( "preferredName", E.string gene.preferredName )
+        , ( "keggKo", E.list E.string gene.keggKo )
+        ]
+
 
 parseEMapperTsv : String -> Result String (List EMapperGene)
 parseEMapperTsv tsv =

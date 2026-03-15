@@ -1,4 +1,4 @@
-port module GeneSequence exposing (requestGeneSequence, receiveGeneSequence, copyToClipboard)
+port module GeneSequence exposing (requestGeneSequence, receiveGeneSequence, copyToClipboard, downloadGeneFasta)
 
 import Json.Encode as E
 import Json.Decode as D
@@ -11,3 +11,6 @@ port receiveGeneSequence : (D.Value -> msg) -> Sub msg
 
 
 port copyToClipboard : E.Value -> Cmd msg
+
+
+port downloadGeneFasta : E.Value -> Cmd msg

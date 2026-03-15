@@ -143,6 +143,45 @@ export const onReady = ({ app, env }) => {
     });
   });
 
+  app.ports.downloadGeneFasta.subscribe(async function(request) {
+    try {
+      const { magId, genes, format } = request;
+      const contigs = await fetchFasta(magId);
+      const lines = [];
+      for (const gene of genes) {
+        const contigSeq = contigs.get(gene.contig);
+        if (!contigSeq) continue;
+        let dna = contigSeq.slice(gene.start - 1, gene.end);
+        if (gene.strand === '-') {
+          dna = reverseComplement(dna);
+        }
+        const seq = format === 'faa' ? translateDNA(dna) : dna;
+        const namePart = gene.preferredName || '-';
+        const cogPart = gene.cogCategory || '-';
+        const koPart = gene.keggKo.length > 0 ? ' ' + gene.keggKo.join(',') : '';
+        const header = `>${gene.seqid} (predicted gene name: ${namePart}; COG class ${cogPart})${koPart}`;
+        lines.push(header);
+        // Wrap sequence at 80 characters
+        for (let i = 0; i < seq.length; i += 80) {
+          lines.push(seq.slice(i, i + 80));
+        }
+      }
+      const content = lines.join('\n') + '\n';
+      const ext = format === 'faa' ? 'faa' : 'fna';
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${magId}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Failed to generate FASTA download:', err);
+    }
+  });
+
   app.ports.requestGeneSequence.subscribe(async function(request) {
     try {
       const { magId, contig, start, end, strand, seqid } = request;
