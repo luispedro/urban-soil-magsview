@@ -23,11 +23,14 @@ import Bootstrap.Grid.Col as Col
 import Bootstrap.Grid.Row as Row
 import Bootstrap.Table as Table
 
+import Json.Encode as E
+
 import DataModel exposing (MAG)
 import Data exposing (mags)
 import Layouts
 import GenomeStats exposing (splitTaxon)
 import Downloads exposing (mkFASTALink)
+import GeneSequence exposing (downloadMultipleUrls)
 
 
 type TreeNode =
@@ -46,6 +49,7 @@ nameOf treeNode =
 type alias Model =
     { tree : TreeNode
     , showDownloadModal : Maybe (List MAG)
+    , downloadStarted : Bool
     }
 
 
@@ -54,6 +58,7 @@ type Msg =
     | CollapseNode String
     | DownloadMAGs (List MAG)
     | ClearDownload
+    | TriggerBulkDownload
 
 type alias RouteParams =
     {}
@@ -84,6 +89,7 @@ init _ =
         model =
             { tree = expandNode 0 "r__Root" <| CollapsedNode "r__Root" mags
             , showDownloadModal = Nothing
+            , downloadStarted = False
             }
     in
         ( model
@@ -94,16 +100,31 @@ update :
     -> Model
     -> (Model, Effect Msg)
 update msg model =
-    let
-        nmodel = case msg of
-            ExpandNode target -> { model | tree = expandNode 0 target model.tree }
-            CollapseNode target -> { model | tree = collapseNode target model.tree }
-            DownloadMAGs ms -> { model | showDownloadModal = Just ms }
-            ClearDownload -> { model | showDownloadModal = Nothing }
-    in
-        ( nmodel
-        , Effect.none
-        )
+    case msg of
+        TriggerBulkDownload ->
+            case model.showDownloadModal of
+                Just ms ->
+                    ( { model | downloadStarted = True }
+                    , ms
+                        |> List.map (\m -> mkFASTALink m.id)
+                        |> E.list E.string
+                        |> downloadMultipleUrls
+                        |> Effect.sendCmd
+                    )
+                Nothing ->
+                    ( model, Effect.none )
+        _ ->
+            let
+                nmodel = case msg of
+                    ExpandNode target -> { model | tree = expandNode 0 target model.tree }
+                    CollapseNode target -> { model | tree = collapseNode target model.tree }
+                    DownloadMAGs ms -> { model | showDownloadModal = Just ms, downloadStarted = False }
+                    ClearDownload -> { model | showDownloadModal = Nothing, downloadStarted = False }
+                    TriggerBulkDownload -> model
+            in
+                ( nmodel
+                , Effect.none
+                )
 
 expand1 : Int -> List MAG -> List TreeNode
 expand1 level mags =
@@ -187,12 +208,12 @@ view model =
                 [ Html.h1 []
                     [ Html.text "Taxonomy explorer" ]
                 ]
-            , showTree [] model.showDownloadModal model.tree
+            , showTree [] model.showDownloadModal model.downloadStarted model.tree
             ]
         }
 
-showTree : List String -> Maybe (List MAG) -> TreeNode -> Html.Html Msg
-showTree path showDownloadModal treeNode =
+showTree : List String -> Maybe (List MAG) -> Bool -> TreeNode -> Html.Html Msg
+showTree path showDownloadModal downloadStarted treeNode =
     let
         name : String
         name = nameOf treeNode
@@ -245,7 +266,7 @@ showTree path showDownloadModal treeNode =
                     ]
                 ))
             ExpandedNode _ children ->
-                (List.map (showTree (name::path) showDownloadModal) children)
+                (List.map (showTree (name::path) showDownloadModal downloadStarted) children)
             LeafNode _ children ->
                 [ Html.ol []
                     ( children
@@ -285,13 +306,13 @@ showTree path showDownloadModal treeNode =
                     , content =
                         [showDownloadModal
                             |> Maybe.withDefault []
-                            |> makeModal]
+                            |> makeModal downloadStarted]
                     }
                 ]
         ))
 
-makeModal : List MAG -> Html.Html Msg
-makeModal ms =
+makeModal : Bool -> List MAG -> Html.Html Msg
+makeModal downloadStarted ms =
     Html.div [HtmlAttr.class "download-modal"]
         [Html.h3 [] [Html.text "Download"]
         , Html.p []
@@ -299,6 +320,21 @@ makeModal ms =
                 if List.length ms == 1
                     then "a single genome."
                     else String.fromInt (List.length ms) ++ " genomes.") ]
+        , if List.length ms < 20
+            then Html.p []
+                [ if downloadStarted
+                    then Button.button
+                        [ Button.primary
+                        , Button.disabled True
+                        ]
+                        [ Html.text "Downloads started!" ]
+                    else Button.button
+                        [ Button.primary
+                        , Button.onClick TriggerBulkDownload
+                        ]
+                        [ Html.text "Download all files" ]
+                ]
+            else Html.text ""
         ,Html.h4 [] [Html.text "Download links"]
         ,Html.ol []
             (List.map (\m ->

@@ -182,6 +182,19 @@ export const onReady = ({ app, env }) => {
     }
   });
 
+  app.ports.downloadMultipleUrls.subscribe(function(urls) {
+    urls.forEach(function(url, i) {
+      setTimeout(function() {
+        const a = document.createElement('a');
+        a.href = url;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }, i * 500);
+    });
+  });
+
   app.ports.requestGeneSequence.subscribe(async function(request) {
     try {
       const { magId, contig, start, end, strand, seqid } = request;
