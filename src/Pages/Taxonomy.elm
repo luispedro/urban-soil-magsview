@@ -118,7 +118,7 @@ update msg model =
                 nmodel = case msg of
                     ExpandNode target -> { model | tree = expandNode 0 target model.tree }
                     CollapseNode target -> { model | tree = collapseNode target model.tree }
-                    DownloadMAGs ms -> { model | showDownloadModal = Just ms, downloadStarted = False }
+                    DownloadMAGs ms -> { model | showDownloadModal = Just (List.sortBy .id ms), downloadStarted = False }
                     ClearDownload -> { model | showDownloadModal = Nothing, downloadStarted = False }
                     TriggerBulkDownload -> model
             in
