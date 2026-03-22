@@ -1,9 +1,17 @@
 module Pages.Taxonomy exposing (page, Model, Msg)
 
+import Bytes exposing (Bytes)
+import Bytes.Encode
+import Dict exposing (Dict)
+import File.Download as Download
 import Html
 import Html.Attributes as HtmlAttr
 import Html.Events as HE
+import Http
 import Set
+import Time
+import Zip
+import Zip.Entry
 
 import Route exposing (Route)
 import Page exposing (Page)
@@ -23,14 +31,11 @@ import Bootstrap.Grid.Col as Col
 import Bootstrap.Grid.Row as Row
 import Bootstrap.Table as Table
 
-import Json.Encode as E
-
 import DataModel exposing (MAG)
 import Data exposing (mags)
 import Layouts
 import GenomeStats exposing (splitTaxon)
 import Downloads exposing (mkFASTALink)
-import GeneSequence exposing (downloadMultipleUrls)
 
 
 type TreeNode =
@@ -46,19 +51,30 @@ nameOf treeNode =
         LeafNode name _ -> name
 
 
+type alias DownloadModal =
+    { taxonName : String
+    , mags : List MAG
+    }
+
 type alias Model =
     { tree : TreeNode
-    , showDownloadModal : Maybe (List MAG)
-    , downloadStarted : Bool
+    , showDownloadModal : Maybe DownloadModal
+    , downloadState : DownloadState
     }
+
+type DownloadState
+    = NotStarted
+    | Downloading { expected : Int, fetched : Dict String Bytes }
+    | DownloadError String
 
 
 type Msg =
     ExpandNode String
     | CollapseNode String
-    | DownloadMAGs (List MAG)
+    | DownloadMAGs String (List MAG)
     | ClearDownload
     | TriggerBulkDownload
+    | GotFastaBytes String (Result Http.Error Bytes)
 
 type alias RouteParams =
     {}
@@ -89,7 +105,7 @@ init _ =
         model =
             { tree = expandNode 0 "r__Root" <| CollapsedNode "r__Root" mags
             , showDownloadModal = Nothing
-            , downloadStarted = False
+            , downloadState = NotStarted
             }
     in
         ( model
@@ -103,28 +119,177 @@ update msg model =
     case msg of
         TriggerBulkDownload ->
             case model.showDownloadModal of
-                Just ms ->
-                    ( { model | downloadStarted = True }
-                    , ms
-                        |> List.map (\m -> mkFASTALink m.id)
-                        |> E.list E.string
-                        |> downloadMultipleUrls
+                Just modal ->
+                    ( { model | downloadState = Downloading { expected = List.length modal.mags, fetched = Dict.empty } }
+                    , modal.mags
+                        |> List.map fetchFastaBytes
+                        |> Cmd.batch
                         |> Effect.sendCmd
                     )
                 Nothing ->
                     ( model, Effect.none )
-        _ ->
-            let
-                nmodel = case msg of
-                    ExpandNode target -> { model | tree = expandNode 0 target model.tree }
-                    CollapseNode target -> { model | tree = collapseNode target model.tree }
-                    DownloadMAGs ms -> { model | showDownloadModal = Just (List.sortBy .id ms), downloadStarted = False }
-                    ClearDownload -> { model | showDownloadModal = Nothing, downloadStarted = False }
-                    TriggerBulkDownload -> model
-            in
-                ( nmodel
-                , Effect.none
+
+        GotFastaBytes magId result ->
+            case model.downloadState of
+                Downloading state ->
+                    case result of
+                        Ok bytes ->
+                            let
+                                newFetched = Dict.insert magId bytes state.fetched
+                            in
+                            if Dict.size newFetched == state.expected then
+                                let
+                                    modal = model.showDownloadModal
+                                        |> Maybe.withDefault { taxonName = "genomes", mags = [] }
+                                in
+                                ( { model | downloadState = NotStarted }
+                                , buildAndDownloadZip modal.taxonName modal.mags newFetched
+                                    |> Effect.sendCmd
+                                )
+                            else
+                                ( { model | downloadState = Downloading { state | fetched = newFetched } }
+                                , Effect.none
+                                )
+                        Err _ ->
+                            ( { model | downloadState = DownloadError ("Failed to download " ++ magId) }
+                            , Effect.none
+                            )
+                _ ->
+                    ( model, Effect.none )
+
+        ExpandNode target ->
+            ( { model | tree = expandNode 0 target model.tree }, Effect.none )
+
+        CollapseNode target ->
+            ( { model | tree = collapseNode target model.tree }, Effect.none )
+
+        DownloadMAGs taxonName ms ->
+            ( { model | showDownloadModal = Just { taxonName = taxonName, mags = List.sortBy .id ms }, downloadState = NotStarted }, Effect.none )
+
+        ClearDownload ->
+            ( { model | showDownloadModal = Nothing, downloadState = NotStarted }, Effect.none )
+
+
+fetchFastaBytes : MAG -> Cmd Msg
+fetchFastaBytes mag =
+    Http.request
+        { method = "GET"
+        , headers = []
+        , url = mkFASTALink mag.id
+        , body = Http.emptyBody
+        , expect = Http.expectBytesResponse (GotFastaBytes mag.id) handleBytesResponse
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+handleBytesResponse : Http.Response Bytes -> Result Http.Error Bytes
+handleBytesResponse response =
+    case response of
+        Http.BadUrl_ url ->
+            Err (Http.BadUrl url)
+        Http.Timeout_ ->
+            Err Http.Timeout
+        Http.NetworkError_ ->
+            Err Http.NetworkError
+        Http.BadStatus_ metadata _ ->
+            Err (Http.BadStatus metadata.statusCode)
+        Http.GoodStatus_ _ body ->
+            Ok body
+
+
+buildAndDownloadZip : String -> List MAG -> Dict String Bytes -> Cmd Msg
+buildAndDownloadZip taxonName magsForDownload fetchedFiles =
+    let
+        dir = "sh-dogs-magsview/"
+
+        safeTaxonName =
+            taxonName
+                |> String.replace " " "_"
+
+        entryMeta path =
+            { path = path
+            , lastModified = ( Time.utc, Time.millisToPosix 0 )
+            , comment = Nothing
+            }
+
+        fastaEntries =
+            fetchedFiles
+                |> Dict.toList
+                |> List.map (\( magId, bytes ) ->
+                    Zip.Entry.store (entryMeta (dir ++ magId ++ ".fna.gz")) bytes
                 )
+
+        tsvBytes =
+            magMetadataTsv magsForDownload
+                |> Bytes.Encode.string
+                |> Bytes.Encode.encode
+
+        tsvEntry =
+            Zip.Entry.store (entryMeta (dir ++ safeTaxonName ++ ".metadata.tsv")) tsvBytes
+
+        readmeBytes =
+            readmeContent taxonName
+                |> Bytes.Encode.string
+                |> Bytes.Encode.encode
+
+        readmeEntry =
+            Zip.Entry.store (entryMeta (dir ++ "README.md")) readmeBytes
+
+        zip =
+            Zip.fromEntries (readmeEntry :: tsvEntry :: fastaEntries)
+    in
+    Download.bytes (safeTaxonName ++ ".zip") "application/zip" (Zip.toBytes zip)
+
+
+readmeContent : String -> String
+readmeContent taxonName =
+    "# Shanghai Dog Gut MAGs: " ++ taxonName ++ "\n"
+        ++ "\n"
+        ++ "This archive contains metagenome-assembled genomes (MAGs) from the\n"
+        ++ "Shanghai Dog Gut MAG catalogue, filtered by taxonomy: " ++ taxonName ++ ".\n"
+        ++ "\n"
+        ++ "## Contents\n"
+        ++ "\n"
+        ++ "- `*.fna.gz` - Genome FASTA files (gzip-compressed)\n"
+        ++ "- `" ++ String.replace " " "_" taxonName ++ ".metadata.tsv` - MAG metadata (TSV format)\n"
+        ++ "- `README.md` - This file\n"
+        ++ "\n"
+        ++ "## Source\n"
+        ++ "\n"
+        ++ "Data downloaded from the Shanghai Dog Gut MAG Viewer:\n"
+        ++ "https://sh-dog-mags.big-data-biology.org/\n"
+        ++ "\n"
+        ++ "## Citation\n"
+        ++ "\n"
+        ++ "Cusco, A., Duan, Y., Gil, F., Chklovski, A., Kruthi, N., Pan, S.,\n"
+        ++ "Forslund, S., Lau, S., Lober, U., Zhao, X.-M., and Coelho, L.P.\n"
+        ++ "\"Capturing global pet dog gut microbial diversity and hundreds of\n"
+        ++ "near-finished bacterial genomes by using long-read metagenomics in a\n"
+        ++ "Shanghai cohort\" (bioRxiv PREPRINT 2025)\n"
+        ++ "DOI: https://doi.org/10.1101/2025.09.17.676595\n"
+
+
+magMetadataTsv : List MAG -> String
+magMetadataTsv ms =
+    let
+        header =
+            "mag_id\ttaxonomy\tcompleteness\tcontamination\tgenome_size\tnr_contigs\tnr_genes\tis_representative"
+
+        row mag =
+            String.join "\t"
+                [ mag.id
+                , mag.taxonomy
+                , String.fromFloat mag.completeness
+                , String.fromFloat mag.contamination
+                , String.fromInt mag.genomeSize
+                , String.fromInt mag.nrContigs
+                , String.fromInt mag.nrGenes
+                , if mag.isRepresentative then "True" else "False"
+                ]
+    in
+    (header :: List.map row ms)
+        |> String.join "\n"
 
 expand1 : Int -> List MAG -> List TreeNode
 expand1 level mags =
@@ -208,12 +373,12 @@ view model =
                 [ Html.h1 []
                     [ Html.text "Taxonomy explorer" ]
                 ]
-            , showTree [] model.showDownloadModal model.downloadStarted model.tree
+            , showTree [] model.showDownloadModal model.downloadState model.tree
             ]
         }
 
-showTree : List String -> Maybe (List MAG) -> Bool -> TreeNode -> Html.Html Msg
-showTree path showDownloadModal downloadStarted treeNode =
+showTree : List String -> Maybe DownloadModal -> DownloadState -> TreeNode -> Html.Html Msg
+showTree path showDownloadModal downloadState treeNode =
     let
         name : String
         name = nameOf treeNode
@@ -266,7 +431,7 @@ showTree path showDownloadModal downloadStarted treeNode =
                     ]
                 ))
             ExpandedNode _ children ->
-                (List.map (showTree (name::path) showDownloadModal downloadStarted) children)
+                (List.map (showTree (name::path) showDownloadModal downloadState) children)
             LeafNode _ children ->
                 [ Html.ol []
                     ( children
@@ -292,11 +457,11 @@ showTree path showDownloadModal downloadStarted treeNode =
                     , ButtonGroup.buttonGroup
                         [ ButtonGroup.small ]
                         [ ButtonGroup.button [ Button.outlinePrimary, Button.small
-                            , Button.onClick (DownloadMAGs <| List.filter (.isRepresentative) children) ]
+                            , Button.onClick (DownloadMAGs name <| List.filter (.isRepresentative) children) ]
                             [ Html.text "Download representatives" ]
                         , ButtonGroup.button
                             [ Button.outlinePrimary , Button.small
-                            , Button.onClick (DownloadMAGs children) ]
+                            , Button.onClick (DownloadMAGs name children) ]
                             [ Html.text "Download all" ]
                         ]
                     ]
@@ -305,14 +470,43 @@ showTree path showDownloadModal downloadStarted treeNode =
                     , onClose = Just ClearDownload
                     , content =
                         [showDownloadModal
+                            |> Maybe.map .mags
                             |> Maybe.withDefault []
-                            |> makeModal downloadStarted]
+                            |> makeModal downloadState]
                     }
                 ]
         ))
 
-makeModal : Bool -> List MAG -> Html.Html Msg
-makeModal downloadStarted ms =
+makeModal : DownloadState -> List MAG -> Html.Html Msg
+makeModal downloadState ms =
+    let
+        downloadButton =
+            case downloadState of
+                Downloading state ->
+                    Button.button
+                        [ Button.primary
+                        , Button.disabled True
+                        ]
+                        [ Html.text <| "Downloading... ("
+                            ++ String.fromInt (Dict.size state.fetched)
+                            ++ "/" ++ String.fromInt state.expected ++ ")" ]
+                DownloadError err ->
+                    Html.span []
+                        [ Button.button
+                            [ Button.primary
+                            , Button.onClick TriggerBulkDownload
+                            ]
+                            [ Html.text "Retry download" ]
+                        , Html.span [HtmlAttr.style "color" "red", HtmlAttr.style "padding-left" "1em"]
+                            [ Html.text err ]
+                        ]
+                NotStarted ->
+                    Button.button
+                        [ Button.primary
+                        , Button.onClick TriggerBulkDownload
+                        ]
+                        [ Html.text "Download as zip" ]
+    in
     Html.div [HtmlAttr.class "download-modal"]
         [Html.h3 [] [Html.text "Download"]
         , Html.p []
@@ -320,21 +514,7 @@ makeModal downloadStarted ms =
                 if List.length ms == 1
                     then "a single genome."
                     else String.fromInt (List.length ms) ++ " genomes.") ]
-        , if List.length ms < 20
-            then Html.p []
-                [ if downloadStarted
-                    then Button.button
-                        [ Button.primary
-                        , Button.disabled True
-                        ]
-                        [ Html.text "Downloads started!" ]
-                    else Button.button
-                        [ Button.primary
-                        , Button.onClick TriggerBulkDownload
-                        ]
-                        [ Html.text "Download all files" ]
-                ]
-            else Html.text ""
+        , Html.p [] [ downloadButton ]
         ,Html.h4 [] [Html.text "Download links"]
         ,Html.ol []
             (List.map (\m ->

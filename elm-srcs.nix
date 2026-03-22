@@ -1,5 +1,20 @@
 {
 
+      "agu-z/elm-zip" = {
+        sha256 = "1gd4bza80nx5w2bkk2nyfskclg0xvykmvg8akcb1gswbndq4y341";
+        version = "3.0.1";
+      };
+
+      "elm-community/list-extra" = {
+        sha256 = "02grd0p5hc2gvdy4n723d1s28pm1grn95jrzic6jcgb26qh16vcc";
+        version = "8.7.0";
+      };
+
+      "folkertdev/elm-flate" = {
+        sha256 = "1an9ps405l1rv8xyzkn1chbs1wx0ymlws5lhxad9rl8rr4am9wgm";
+        version = "2.0.5";
+      };
+
       "BrianHicks/elm-csv" = {
         sha256 = "1y9gqkn4daa0j4cv8rh0dkssvi01jqnzf38lq9cn9fk29kdhk1l3";
         version = "4.0.1";
