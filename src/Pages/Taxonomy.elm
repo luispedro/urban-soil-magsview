@@ -170,6 +170,24 @@ update msg model =
             ( { model | showDownloadModal = Nothing, downloadState = NotStarted }, Effect.none )
 
 
+bestTaxonName : List MAG -> String
+bestTaxonName ms =
+    case ms of
+        [] ->
+            "genomes"
+        mag :: _ ->
+            mag.taxonomy
+                |> String.split ";"
+                |> List.reverse
+                |> List.filter (\level ->
+                    case String.split "__" level of
+                        [ _, name ] -> not (String.isEmpty name)
+                        _ -> False
+                )
+                |> List.head
+                |> Maybe.withDefault "genomes"
+
+
 fetchFastaBytes : MAG -> Cmd Msg
 fetchFastaBytes mag =
     Http.request
@@ -457,11 +475,11 @@ showTree path showDownloadModal downloadState treeNode =
                     , ButtonGroup.buttonGroup
                         [ ButtonGroup.small ]
                         [ ButtonGroup.button [ Button.outlinePrimary, Button.small
-                            , Button.onClick (DownloadMAGs name <| List.filter (.isRepresentative) children) ]
+                            , Button.onClick (DownloadMAGs (bestTaxonName children) <| List.filter (.isRepresentative) children) ]
                             [ Html.text "Download representatives" ]
                         , ButtonGroup.button
                             [ Button.outlinePrimary , Button.small
-                            , Button.onClick (DownloadMAGs name children) ]
+                            , Button.onClick (DownloadMAGs (bestTaxonName children) children) ]
                             [ Html.text "Download all" ]
                         ]
                     ]
