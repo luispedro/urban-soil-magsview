@@ -1,11 +1,16 @@
 module Pages.Genomes exposing (page, Model, Msg)
 
+import Bytes exposing (Bytes)
+import Bytes.Encode
 import Dict exposing (Dict)
+import File.Download as Download
 import Html
 import Html.Attributes as HtmlAttr
 import Html.Events as HE
-
-import File.Download as Download
+import Http
+import Time
+import Zip
+import Zip.Entry
 
 import Route exposing (Route)
 import Page exposing (Page)
@@ -27,6 +32,7 @@ import View exposing (View)
 
 import W.InputCheckbox as InputCheckbox
 import W.InputSlider as InputSlider
+import W.Modal as Modal
 import Bootstrap.Button as Button
 import Bootstrap.Form.Input as Input
 import Bootstrap.Grid as Grid
@@ -36,6 +42,7 @@ import Bootstrap.Table as Table
 
 import DataModel exposing (MAG)
 import Data exposing (mags)
+import Downloads exposing (mkFASTALink)
 import GenomeStats exposing (Quality(..), magQuality, taxonomyLast, splitTaxon, showTaxon)
 import Shared
 
@@ -49,6 +56,11 @@ type SortOrder =
     | ByNrContigs
     | ByGenomeSize
 
+type DownloadState
+    = NotStarted
+    | Downloading { expected : Int, fetched : Dict String Bytes }
+    | DownloadError String
+
 type alias Model =
     { qualityFilter : Maybe String
     , sortOrder : SortOrder
@@ -61,6 +73,9 @@ type alias Model =
     , showFullTaxonomy : Bool
 
     , hovering : List (CI.One MAG CI.Dot)
+
+    , showDownloadModal : Bool
+    , downloadState : DownloadState
     }
 
 type Msg =
@@ -72,6 +87,10 @@ type Msg =
     | UpdateMaxNrContigs Float
     | ToggleShowFullTaxonomy
     | OnHover (List (CI.One MAG CI.Dot))
+    | ShowDownloadModal
+    | ClearDownload
+    | TriggerBulkDownload
+    | GotFastaBytes String (Result Http.Error Bytes)
 
 
 
@@ -90,6 +109,8 @@ init route () =
             , maxNrContigsStep = 6
             , showFullTaxonomy = False
             , hovering = []
+            , showDownloadModal = False
+            , downloadState = NotStarted
             }
         model1 = case Dict.get "taxonomy" route.query of
             Just taxonomy ->
@@ -171,6 +192,43 @@ update msg model =
                 )
         OnHover hovering ->
             ({ model | hovering = hovering }, Effect.none)
+        ShowDownloadModal ->
+            ({ model | showDownloadModal = True, downloadState = NotStarted }, Effect.none)
+        ClearDownload ->
+            ({ model | showDownloadModal = False, downloadState = NotStarted }, Effect.none)
+        TriggerBulkDownload ->
+            let
+                sel = filteredMags model
+            in
+            ( { model | downloadState = Downloading { expected = List.length sel, fetched = Dict.empty } }
+            , sel
+                |> List.map fetchFastaBytes
+                |> Cmd.batch
+                |> Effect.sendCmd
+            )
+        GotFastaBytes magId result ->
+            case model.downloadState of
+                Downloading state ->
+                    case result of
+                        Ok bytes ->
+                            let
+                                newFetched = Dict.insert magId bytes state.fetched
+                            in
+                            if Dict.size newFetched == state.expected then
+                                ( { model | downloadState = NotStarted, showDownloadModal = False }
+                                , buildAndDownloadZip (filteredMags model) newFetched
+                                    |> Effect.sendCmd
+                                )
+                            else
+                                ( { model | downloadState = Downloading { state | fetched = newFetched } }
+                                , Effect.none
+                                )
+                        Err _ ->
+                            ( { model | downloadState = DownloadError ("Failed to download " ++ magId) }
+                            , Effect.none
+                            )
+                _ ->
+                    ( model, Effect.none )
 
 
 last : List a -> Maybe a
@@ -265,6 +323,124 @@ mkTSV model =
             , List.map (String.join "\t") rows
                 |> String.join "\n"
             ]
+
+fetchFastaBytes : MAG -> Cmd Msg
+fetchFastaBytes mag =
+    Http.request
+        { method = "GET"
+        , headers = []
+        , url = mkFASTALink mag.id
+        , body = Http.emptyBody
+        , expect = Http.expectBytesResponse (GotFastaBytes mag.id) handleBytesResponse
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+handleBytesResponse : Http.Response Bytes -> Result Http.Error Bytes
+handleBytesResponse response =
+    case response of
+        Http.BadUrl_ url ->
+            Err (Http.BadUrl url)
+        Http.Timeout_ ->
+            Err Http.Timeout
+        Http.NetworkError_ ->
+            Err Http.NetworkError
+        Http.BadStatus_ metadata _ ->
+            Err (Http.BadStatus metadata.statusCode)
+        Http.GoodStatus_ _ body ->
+            Ok body
+
+
+buildAndDownloadZip : List MAG -> Dict String Bytes -> Cmd Msg
+buildAndDownloadZip magsForDownload fetchedFiles =
+    let
+        dir = "sh-dogs-magsview/"
+
+        entryMeta path =
+            { path = path
+            , lastModified = ( Time.utc, Time.millisToPosix 0 )
+            , comment = Nothing
+            }
+
+        fastaEntries =
+            fetchedFiles
+                |> Dict.toList
+                |> List.map (\( magId, bytes ) ->
+                    Zip.Entry.store (entryMeta (dir ++ magId ++ ".fna.gz")) bytes
+                )
+
+        tsvBytes =
+            magMetadataTsv magsForDownload
+                |> Bytes.Encode.string
+                |> Bytes.Encode.encode
+
+        tsvEntry =
+            Zip.Entry.store (entryMeta (dir ++ "SHD1_selected_genomes.metadata.tsv")) tsvBytes
+
+        readmeBytes =
+            readmeContent
+                |> Bytes.Encode.string
+                |> Bytes.Encode.encode
+
+        readmeEntry =
+            Zip.Entry.store (entryMeta (dir ++ "README.md")) readmeBytes
+
+        zip =
+            Zip.fromEntries (readmeEntry :: tsvEntry :: fastaEntries)
+    in
+    Download.bytes "SHD1_selected_genomes.zip" "application/zip" (Zip.toBytes zip)
+
+
+readmeContent : String
+readmeContent =
+    "# Shanghai Dog Gut MAGs: Selected Genomes\n"
+        ++ "\n"
+        ++ "This archive contains metagenome-assembled genomes (MAGs) from the\n"
+        ++ "Shanghai Dog Gut MAG catalogue, selected from the genome browser table.\n"
+        ++ "\n"
+        ++ "## Contents\n"
+        ++ "\n"
+        ++ "- `*.fna.gz` - Genome FASTA files (gzip-compressed)\n"
+        ++ "- `SHD1_selected_genomes.metadata.tsv` - MAG metadata (TSV format)\n"
+        ++ "- `README.md` - This file\n"
+        ++ "\n"
+        ++ "## Source\n"
+        ++ "\n"
+        ++ "Data downloaded from the Shanghai Dog Gut MAG Viewer:\n"
+        ++ "https://sh-dog-mags.big-data-biology.org/\n"
+        ++ "\n"
+        ++ "## Citation\n"
+        ++ "\n"
+        ++ "Cusco, A., Duan, Y., Gil, F., Chklovski, A., Kruthi, N., Pan, S.,\n"
+        ++ "Forslund, S., Lau, S., Lober, U., Zhao, X.-M., and Coelho, L.P.\n"
+        ++ "\"Capturing global pet dog gut microbial diversity and hundreds of\n"
+        ++ "near-finished bacterial genomes by using long-read metagenomics in a\n"
+        ++ "Shanghai cohort\" (bioRxiv PREPRINT 2025)\n"
+        ++ "DOI: https://doi.org/10.1101/2025.09.17.676595\n"
+
+
+magMetadataTsv : List MAG -> String
+magMetadataTsv ms =
+    let
+        header =
+            "mag_id\ttaxonomy\tcompleteness\tcontamination\tgenome_size\tnr_contigs\tnr_genes\tis_representative"
+
+        row mag =
+            String.join "\t"
+                [ mag.id
+                , mag.taxonomy
+                , String.fromFloat mag.completeness
+                , String.fromFloat mag.contamination
+                , String.fromInt mag.genomeSize
+                , String.fromInt mag.nrContigs
+                , String.fromInt mag.nrGenes
+                , if mag.isRepresentative then "True" else "False"
+                ]
+    in
+    (header :: List.map row ms)
+        |> String.join "\n"
+
 
 filteredMags : Model -> List MAG
 filteredMags model =
@@ -401,11 +577,33 @@ view model =
                     ]
                 )::(viewCharts model sel))
             , Grid.simpleRow [ Grid.col [ ]
-                [Button.button
-                    [ Button.primary
-                    , Button.onClick DownloadTSV
+                [Html.div [HtmlAttr.style "margin-bottom" "1em"]
+                    [ Button.button
+                        [ Button.primary
+                        , Button.onClick DownloadTSV
+                        ]
+                        [ Html.text "Download table as TSV" ]
+                    , Html.text " "
+                    , if List.length sel <= 200 then
+                        Button.button
+                            [ Button.outlinePrimary
+                            , Button.onClick ShowDownloadModal
+                            ]
+                            [ Html.text ("Download " ++ String.fromInt (List.length sel) ++ " genomes as zip") ]
+                      else
+                        Button.button
+                            [ Button.outlinePrimary
+                            , Button.disabled True
+                            , Button.attrs [ HtmlAttr.title "Filter to 100 or fewer genomes to enable zip download" ]
+                            ]
+                            [ Html.text ("Download genomes as zip (max 200, currently " ++ String.fromInt (List.length sel) ++ ")") ]
                     ]
-                    [ Html.text "Download table as TSV" ]
+                , Modal.view []
+                    { isOpen = model.showDownloadModal
+                    , onClose = Just ClearDownload
+                    , content =
+                        [ viewDownloadModal model.downloadState sel ]
+                    }
                 , Table.table
                     { options = [ Table.striped, Table.hover, Table.responsive ]
                     , thead =  Table.simpleThead
@@ -437,6 +635,53 @@ view model =
                     }
             ]]]
         }
+
+viewDownloadModal : DownloadState -> List MAG -> Html.Html Msg
+viewDownloadModal downloadState ms =
+    let
+        downloadButton =
+            case downloadState of
+                Downloading state ->
+                    Button.button
+                        [ Button.primary
+                        , Button.disabled True
+                        ]
+                        [ Html.text <| "Downloading... ("
+                            ++ String.fromInt (Dict.size state.fetched)
+                            ++ "/" ++ String.fromInt state.expected ++ ")" ]
+                DownloadError err ->
+                    Html.span []
+                        [ Button.button
+                            [ Button.primary
+                            , Button.onClick TriggerBulkDownload
+                            ]
+                            [ Html.text "Retry download" ]
+                        , Html.span [HtmlAttr.style "color" "red", HtmlAttr.style "padding-left" "1em"]
+                            [ Html.text err ]
+                        ]
+                NotStarted ->
+                    Button.button
+                        [ Button.primary
+                        , Button.onClick TriggerBulkDownload
+                        ]
+                        [ Html.text "Download as zip" ]
+    in
+    Html.div [HtmlAttr.class "download-modal"]
+        [ Html.h3 [] [Html.text "Download"]
+        , Html.p []
+            [ Html.text <| "You are downloading " ++ (
+                if List.length ms == 1
+                    then "a single genome."
+                    else String.fromInt (List.length ms) ++ " genomes.") ]
+        , Html.p [] [ downloadButton ]
+        , Html.h4 [] [Html.text "Command line download"]
+        , Html.pre []
+            ((Html.text "# Run this command to download the genomes:\n")::
+            List.map (\m ->
+                Html.text <| "wget " ++ mkFASTALink m.id ++ "\n"
+            ) ms)
+        ]
+
 
 viewCharts model sel =
     [ Grid.col []
