@@ -34,6 +34,7 @@ import W.InputCheckbox as InputCheckbox
 import W.InputSlider as InputSlider
 import W.Modal as Modal
 import Bootstrap.Button as Button
+import Bootstrap.ButtonGroup as ButtonGroup
 import Bootstrap.Form.Input as Input
 import Bootstrap.Grid as Grid
 import Bootstrap.Grid.Col as Col
@@ -76,6 +77,7 @@ type alias Model =
 
     , showDownloadModal : Bool
     , downloadState : DownloadState
+    , useWget : Bool
     }
 
 type Msg =
@@ -91,6 +93,8 @@ type Msg =
     | ClearDownload
     | TriggerBulkDownload
     | GotFastaBytes String (Result Http.Error Bytes)
+    | DownloadScript String String
+    | SetUseWget Bool
 
 
 
@@ -111,6 +115,7 @@ init route () =
             , hovering = []
             , showDownloadModal = False
             , downloadState = NotStarted
+            , useWget = True
             }
         model1 = case Dict.get "taxonomy" route.query of
             Just taxonomy ->
@@ -206,6 +211,12 @@ update msg model =
                 |> Cmd.batch
                 |> Effect.sendCmd
             )
+        DownloadScript filename content ->
+            ( model
+            , Effect.sendCmd <| Download.string filename "text/x-shellscript" content
+            )
+        SetUseWget v ->
+            ({ model | useWget = v }, Effect.none)
         GotFastaBytes magId result ->
             case model.downloadState of
                 Downloading state ->
@@ -602,7 +613,7 @@ view model =
                     { isOpen = model.showDownloadModal
                     , onClose = Just ClearDownload
                     , content =
-                        [ viewDownloadModal model.downloadState sel ]
+                        [ viewDownloadModal model.useWget model.downloadState sel ]
                     }
                 , Table.table
                     { options = [ Table.striped, Table.hover, Table.responsive ]
@@ -636,8 +647,8 @@ view model =
             ]]]
         }
 
-viewDownloadModal : DownloadState -> List MAG -> Html.Html Msg
-viewDownloadModal downloadState ms =
+viewDownloadModal : Bool -> DownloadState -> List MAG -> Html.Html Msg
+viewDownloadModal useWget downloadState ms =
     let
         downloadButton =
             case downloadState of
@@ -665,6 +676,16 @@ viewDownloadModal downloadState ms =
                         , Button.onClick TriggerBulkDownload
                         ]
                         [ Html.text "Download as zip" ]
+
+        mkScript cmd =
+            "#!/usr/bin/env bash\nset -e\n\n"
+                ++ String.join "" (List.map (\m -> cmd ++ " " ++ mkFASTALink m.id ++ "\n") ms)
+
+        (scriptFilename, scriptContent) =
+            if useWget then
+                ("download_genomes_wget.sh", mkScript "wget")
+            else
+                ("download_genomes_curl.sh", mkScript "curl -O")
     in
     Html.div [HtmlAttr.class "download-modal"]
         [ Html.h3 [] [Html.text "Download"]
@@ -675,11 +696,25 @@ viewDownloadModal downloadState ms =
                     else String.fromInt (List.length ms) ++ " genomes.") ]
         , Html.p [] [ downloadButton ]
         , Html.h4 [] [Html.text "Command line download"]
-        , Html.pre []
-            ((Html.text "# Run this command to download the genomes:\n")::
-            List.map (\m ->
-                Html.text <| "wget " ++ mkFASTALink m.id ++ "\n"
-            ) ms)
+        , Html.p []
+            [ ButtonGroup.buttonGroup
+                [ ButtonGroup.small ]
+                [ ButtonGroup.button
+                    [ if useWget then Button.primary else Button.outlineSecondary
+                    , Button.onClick (SetUseWget True)
+                    ] [ Html.text "wget" ]
+                , ButtonGroup.button
+                    [ if useWget then Button.outlineSecondary else Button.primary
+                    , Button.onClick (SetUseWget False)
+                    ] [ Html.text "curl" ]
+                ]
+            , Html.text " "
+            , Button.button
+                [ Button.outlineSecondary
+                , Button.onClick (DownloadScript scriptFilename scriptContent)
+                ]
+                [ Html.text "Download script" ]
+            ]
         ]
 
 

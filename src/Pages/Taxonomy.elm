@@ -60,6 +60,7 @@ type alias Model =
     { tree : TreeNode
     , showDownloadModal : Maybe DownloadModal
     , downloadState : DownloadState
+    , useWget : Bool
     }
 
 type DownloadState
@@ -75,6 +76,8 @@ type Msg =
     | ClearDownload
     | TriggerBulkDownload
     | GotFastaBytes String (Result Http.Error Bytes)
+    | DownloadScript String String
+    | SetUseWget Bool
 
 type alias RouteParams =
     {}
@@ -106,6 +109,7 @@ init _ =
             { tree = expandNode 0 "r__Root" <| CollapsedNode "r__Root" mags
             , showDownloadModal = Nothing
             , downloadState = NotStarted
+            , useWget = True
             }
     in
         ( model
@@ -168,6 +172,13 @@ update msg model =
 
         ClearDownload ->
             ( { model | showDownloadModal = Nothing, downloadState = NotStarted }, Effect.none )
+
+        DownloadScript filename content ->
+            ( model
+            , Effect.sendCmd <| Download.string filename "text/x-shellscript" content
+            )
+        SetUseWget v ->
+            ({ model | useWget = v }, Effect.none)
 
 
 bestTaxonName : List MAG -> String
@@ -391,12 +402,12 @@ view model =
                 [ Html.h1 []
                     [ Html.text "Taxonomy explorer" ]
                 ]
-            , showTree [] model.showDownloadModal model.downloadState model.tree
+            , showTree [] model.useWget model.showDownloadModal model.downloadState model.tree
             ]
         }
 
-showTree : List String -> Maybe DownloadModal -> DownloadState -> TreeNode -> Html.Html Msg
-showTree path showDownloadModal downloadState treeNode =
+showTree : List String -> Bool -> Maybe DownloadModal -> DownloadState -> TreeNode -> Html.Html Msg
+showTree path useWget showDownloadModal downloadState treeNode =
     let
         name : String
         name = nameOf treeNode
@@ -449,7 +460,7 @@ showTree path showDownloadModal downloadState treeNode =
                     ]
                 ))
             ExpandedNode _ children ->
-                (List.map (showTree (name::path) showDownloadModal downloadState) children)
+                (List.map (showTree (name::path) useWget showDownloadModal downloadState) children)
             LeafNode _ children ->
                 [ Html.ol []
                     ( children
@@ -490,13 +501,13 @@ showTree path showDownloadModal downloadState treeNode =
                         [showDownloadModal
                             |> Maybe.map .mags
                             |> Maybe.withDefault []
-                            |> makeModal downloadState]
+                            |> makeModal useWget downloadState]
                     }
                 ]
         ))
 
-makeModal : DownloadState -> List MAG -> Html.Html Msg
-makeModal downloadState ms =
+makeModal : Bool -> DownloadState -> List MAG -> Html.Html Msg
+makeModal useWget downloadState ms =
     let
         downloadButton =
             case downloadState of
@@ -524,6 +535,16 @@ makeModal downloadState ms =
                         , Button.onClick TriggerBulkDownload
                         ]
                         [ Html.text "Download as zip" ]
+
+        mkScript cmd =
+            "#!/usr/bin/env bash\nset -e\n\n"
+                ++ String.join "" (List.map (\m -> cmd ++ " " ++ mkFASTALink m.id ++ "\n") ms)
+
+        (scriptFilename, scriptContent) =
+            if useWget then
+                ("download_genomes_wget.sh", mkScript "wget")
+            else
+                ("download_genomes_curl.sh", mkScript "curl -O")
     in
     Html.div [HtmlAttr.class "download-modal"]
         [Html.h3 [] [Html.text "Download"]
@@ -539,9 +560,24 @@ makeModal downloadState ms =
                 Html.li []
                     [Html.a [HtmlAttr.href (mkFASTALink m.id)] [Html.text m.id]]
                 ) ms)
-        ,Html.h4 [] [Html.text "Command line download"]
-        ,Html.pre []
-            ((Html.text "# Run this command to download the genomes:\n")::
-            List.map (\m ->
-                Html.text <| "wget " ++ mkFASTALink m.id ++ "\n"
-            ) ms)]
+        , Html.h4 [] [Html.text "Command line download"]
+        , Html.p []
+            [ ButtonGroup.buttonGroup
+                [ ButtonGroup.small ]
+                [ ButtonGroup.button
+                    [ if useWget then Button.primary else Button.outlineSecondary
+                    , Button.onClick (SetUseWget True)
+                    ] [ Html.text "wget" ]
+                , ButtonGroup.button
+                    [ if useWget then Button.outlineSecondary else Button.primary
+                    , Button.onClick (SetUseWget False)
+                    ] [ Html.text "curl" ]
+                ]
+            , Html.text " "
+            , Button.button
+                [ Button.outlineSecondary
+                , Button.onClick (DownloadScript scriptFilename scriptContent)
+                ]
+                [ Html.text "Download script" ]
+            ]
+        ]
