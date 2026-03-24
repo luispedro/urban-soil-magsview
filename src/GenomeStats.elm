@@ -1,7 +1,7 @@
 module GenomeStats exposing (chartNrContigs,
                             chartQualitySummary,
                             chartQualityScatter,
-                            Quality, magQuality, qualityString,
+                            Quality(..), magQuality, qualityString,
                             taxonomyLast,
                             printableTaxonomy,
                             splitTaxon,

@@ -36,7 +36,7 @@ import Bootstrap.Table as Table
 
 import DataModel exposing (MAG)
 import Data exposing (mags)
-import GenomeStats exposing (taxonomyLast, splitTaxon, showTaxon)
+import GenomeStats exposing (Quality(..), magQuality, taxonomyLast, splitTaxon, showTaxon)
 import Shared
 
 
@@ -53,6 +53,7 @@ type alias Model =
     { qualityFilter : Maybe String
     , sortOrder : SortOrder
     , repsOnly : Bool
+    , hqOnly : Bool
     , taxonomyFilter : String
     , taxonomyUpActive : Bool
     , maxNrContigsStep : Float
@@ -66,6 +67,7 @@ type Msg =
     SetSortOrder SortOrder
     | DownloadTSV
     | SetRepsOnly Bool
+    | SetHqOnly Bool
     | UpdateTaxonomyFilter String
     | UpdateMaxNrContigs Float
     | ToggleShowFullTaxonomy
@@ -82,6 +84,7 @@ init route () =
             { qualityFilter = Nothing
             , sortOrder = ById
             , repsOnly = False
+            , hqOnly = False
             , taxonomyFilter = ""
             , taxonomyUpActive = False
             , maxNrContigsStep = 6
@@ -145,6 +148,9 @@ update msg model =
         SetRepsOnly ro ->
             ({ model | repsOnly = ro }
             , Effect.none)
+        SetHqOnly hq ->
+            ({ model | hqOnly = hq }
+            , Effect.none)
         UpdateTaxonomyFilter filter ->
             ({ model | taxonomyFilter = filter
                     , taxonomyUpActive = upOneLevel filter /= filter
@@ -207,6 +213,9 @@ mkTSV model =
             )
             |> (if model.repsOnly
                     then List.filter .isRepresentative
+                    else identity)
+            |> (if model.hqOnly
+                    then List.filter (\t -> magQuality t == High)
                     else identity)
             |> (if String.isEmpty model.taxonomyFilter
                     then identity
@@ -285,6 +294,9 @@ filteredMags model =
             |> (if model.repsOnly
                     then List.filter .isRepresentative
                     else identity)
+            |> (if model.hqOnly
+                    then List.filter (\t -> magQuality t == High)
+                    else identity)
             |> (if String.isEmpty model.taxonomyFilter
                     then identity
                     else List.filter (\t ->
@@ -343,6 +355,14 @@ view model =
                             [InputCheckbox.toggle, InputCheckbox.small]
                             { value = model.repsOnly
                             , onInput = SetRepsOnly
+                            }
+                        ]
+                    , Html.p []
+                        [ Html.text "High-quality genomes only: "
+                        , InputCheckbox.view
+                            [InputCheckbox.toggle, InputCheckbox.small]
+                            { value = model.hqOnly
+                            , onInput = SetHqOnly
                             }
                         ]
                     , Html.p []
