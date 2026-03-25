@@ -91,7 +91,7 @@ contentManuscript = """
 > _Long-read metagenomic sequencing reveals novel lineages and functional
 > diversity in urban soil microbiome_ by Yiqian Duan, Anna Cuscó, Yaozhong Zhang,
 > Juan S. Inda-Díaz, Chengkai Zhu, Alexandre Areias Castro, Xinrun Yang, Jiabao Yu,
-> Gaofei Jiang, Xing-Ming Zhao, and Luis Pedro Coelho (in preparation, [draft available upon request](mailto:luispedro.coelho@qut.edu.au))
+> Gaofei Jiang, Xing-Ming Zhao, Luis Pedro Coelho (bioRxiv 2026.03.20.713087;
+> doi: [10.64898/2026.03.20.713087](https://doi.org/10.64898/2026.03.20.713087))
 
 """
-
