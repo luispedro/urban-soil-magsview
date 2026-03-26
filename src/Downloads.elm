@@ -1,4 +1,4 @@
-module Downloads exposing (mkFASTALink, mkENOGLink, mkEMapperSummaryLink)
+module Downloads exposing (mkFASTALink, mkENOGLink, mkEMapperSummaryLink, mkBarrnapLink)
 
 {-| This module provides functions to create download links for FASTA and ENOG files based on a given MAG ID. -}
 
@@ -13,4 +13,8 @@ mkENOGLink mid =
 mkEMapperSummaryLink : String -> String
 mkEMapperSummaryLink mid =
     "https://sh-dog-mags-data.big-data-biology.org/ShanghaiDogsMAGAnnotations/EMapperSummary/" ++ mid ++ ".emapper_summary.tsv"
+
+mkBarrnapLink : String -> String
+mkBarrnapLink mid =
+    "https://sh-dog-mags-data.big-data-biology.org/ShanghaiDogsMAGAnnotations/Barrnap/" ++ mid ++ "_ribosomal.fna.gz"
 

@@ -32,7 +32,7 @@ import DataModel exposing (MAG)
 import Layouts
 import GenomeStats exposing (taxonomyLast, printableTaxonomy, showTaxon)
 import Utils exposing (mkTooltipQuestionMark)
-import Downloads exposing (mkFASTALink, mkENOGLink, mkEMapperSummaryLink)
+import Downloads exposing (mkFASTALink, mkENOGLink, mkEMapperSummaryLink, mkBarrnapLink)
 import GeneSequence
 
 -- INIT
@@ -58,6 +58,10 @@ type alias MAGData =
     , argData : List ARG
     }
 
+type GeneType
+    = ProteinCoding
+    | RRna String  -- "16S_rRNA", "23S_rRNA", "5S_rRNA"
+
 type alias EMapperGene =
     { seqid : String
     , contig : String
@@ -68,6 +72,7 @@ type alias EMapperGene =
     , preferredName : String
     , keggKo : List String
     , keggModule : List String
+    , geneType : GeneType
     }
 
 type LoadedDataModel =
@@ -91,9 +96,20 @@ type GeneSequenceState
     | GeneSequenceLoaded EMapperGene GeneSequenceData
     | GeneSequenceError EMapperGene String
 
+type RRnaDataModel
+    = RRnaLoaded (List EMapperGene)
+    | RRnaError String
+    | RRnaWaiting
+
+type GeneDisplayFilter
+    = ShowAll
+    | ShowProteinCoding
+    | ShowRRna
+
 type alias Model =
     { magdata : LoadedDataModel
     , emapperData : EMapperDataModel
+    , rRnaData : RRnaDataModel
     , expanded : Bool
     , expanded16S : List Int
     , showARGSequences : Bool
@@ -103,6 +119,7 @@ type alias Model =
     , geneSequence : GeneSequenceState
     , showGeneTable : Bool
     , showDnaSequence : Bool
+    , geneFilter : GeneDisplayFilter
     }
 
 type Msg =
@@ -123,6 +140,8 @@ type Msg =
     | ToggleGeneTable
     | ToggleDnaSequence
     | DownloadGeneFasta String
+    | RRnaDataReceived D.Value
+    | SetGeneFilter GeneDisplayFilter
     | NoMsg
 
 type APIResult =
@@ -157,6 +176,7 @@ model0 : String -> Model
 model0 magid =
     { magdata = Waiting
     , emapperData = EMapperWaiting
+    , rRnaData = RRnaWaiting
     , expanded = False
     , expanded16S = []
     , showARGSequences = False
@@ -166,6 +186,7 @@ model0 magid =
     , geneSequence = NoGeneSelected
     , showGeneTable = False
     , showDnaSequence = False
+    , geneFilter = ShowAll
     }
 
 cmd0 : String -> Effect Msg
@@ -183,6 +204,10 @@ cmd0 magid =
                 , expect = Http.expectString EMapperData
                 }
             )
+        , Effect.sendCmd
+            (GeneSequence.requestRRnaGenes
+                (E.object [ ( "magId", E.string magid ) ])
+            )
         ]
 
 page : Shared.Model -> Route { genome : String } -> Page Model Msg
@@ -190,7 +215,10 @@ page shared route =
     Page.new
         { init = \_ -> (model0 route.params.genome, cmd0 route.params.genome)
         , update = update
-        , subscriptions = \_ -> GeneSequence.receiveGeneSequence GeneSequenceReceived
+        , subscriptions = \_ -> Sub.batch
+            [ GeneSequence.receiveGeneSequence GeneSequenceReceived
+            , GeneSequence.receiveRRnaGenes RRnaDataReceived
+            ]
         , view = view shared route
         }
     |> Page.withLayout (\_ -> Layouts.Main {})
@@ -301,6 +329,11 @@ update msg model =
                     ( model, Effect.none )
 
         GeneClicked gene ->
+            let
+                isRRna = case gene.geneType of
+                    RRna _ -> True
+                    ProteinCoding -> False
+            in
             ( { model | geneSequence = GeneSequenceLoading gene }
             , Effect.sendCmd
                 (GeneSequence.requestGeneSequence
@@ -311,6 +344,7 @@ update msg model =
                         , ( "end", E.int gene.end )
                         , ( "strand", E.string gene.strand )
                         , ( "seqid", E.string gene.seqid )
+                        , ( "skipTranslation", E.bool isRRna )
                         ]
                     )
                 )
@@ -356,6 +390,44 @@ update msg model =
                     [ ("text", E.string text)
                     , ("buttonId", E.string buttonId)
                     ])) )
+
+        RRnaDataReceived value ->
+            let
+                genesDecoder =
+                    D.field "genes"
+                        (D.list
+                            (D.map5 (\rtype contig start end strand ->
+                                    { seqid = rtype ++ "::" ++ contig ++ ":" ++ String.fromInt start ++ "-" ++ String.fromInt end ++ "(" ++ strand ++ ")"
+                                    , contig = contig
+                                    , start = start
+                                    , end = end
+                                    , strand = strand
+                                    , cogCategory = ""
+                                    , preferredName = String.replace "_" " " rtype
+                                    , keggKo = []
+                                    , keggModule = []
+                                    , geneType = RRna rtype
+                                    }
+                                )
+                                (D.field "rRnaType" D.string)
+                                (D.field "contig" D.string)
+                                (D.field "start" D.int)
+                                (D.field "end" D.int)
+                                (D.field "strand" D.string)
+                            )
+                        )
+                newRRnaData =
+                    case D.decodeValue genesDecoder value of
+                        Ok genes -> RRnaLoaded genes
+                        Err _ ->
+                            case D.decodeValue (D.field "error" D.string) value of
+                                Ok errMsg -> RRnaError errMsg
+                                Err e -> RRnaError (D.errorToString e)
+            in
+            ( { model | rRnaData = newRRnaData }, Effect.none )
+
+        SetGeneFilter filter ->
+            ( { model | geneFilter = filter }, Effect.none )
 
         _ ->
             ( model
@@ -797,6 +869,7 @@ parseTsvLine line =
                         , preferredName = if prefName == "-" then "" else prefName
                         , keggKo = keggKo
                         , keggModule = keggModule
+                        , geneType = ProteinCoding
                         }
                 _ -> Nothing
         _ -> Nothing
@@ -813,6 +886,13 @@ selectedGeneFromState state =
         GeneSequenceError gene _ -> Just gene
 
 
+filterGenes : GeneDisplayFilter -> List EMapperGene -> List EMapperGene
+filterGenes filter genes =
+    case filter of
+        ShowAll -> genes
+        ShowProteinCoding -> List.filter (\g -> g.geneType == ProteinCoding) genes
+        ShowRRna -> List.filter (\g -> g.geneType /= ProteinCoding) genes
+
 showGenomeMap : Model -> Html.Html Msg
 showGenomeMap model =
     case model.emapperData of
@@ -820,20 +900,28 @@ showGenomeMap model =
             Html.p [] [ Html.text "Loading genome map..." ]
         EMapperError e ->
             Html.p [] [ Html.text ("Could not load genome map: " ++ e) ]
-        EMapperLoaded genes ->
+        EMapperLoaded proteinGenes ->
             let
-                contigs = groupByContig genes
-                globalMax = contigs
+                rRnaGenes = case model.rRnaData of
+                    RRnaLoaded genes -> genes
+                    _ -> []
+                allGenes = proteinGenes ++ rRnaGenes
+                allContigs = groupByContig allGenes
+                globalMax = allContigs
                     |> List.map .maxPos
                     |> List.maximum
                     |> Maybe.withDefault 1
+                displayContigs = allContigs
+                    |> List.map (\c -> { c | genes = filterGenes model.geneFilter c.genes })
+                displayGenes = filterGenes model.geneFilter allGenes
                 selectedGene = selectedGeneFromState model.geneSequence
             in
             Html.div []
                 [ genomeMapControls model globalMax
-                , renderGenomeMap model.genomeMapZoom model.genomeMapOffset selectedGene genes
-                , renderGeneDetail model.showDnaSequence genes model.geneSequence
-                , renderCogLegend genes
+                , geneFilterControls model.geneFilter (not (List.isEmpty rRnaGenes))
+                , renderGenomeMap model.genomeMapZoom model.genomeMapOffset selectedGene globalMax displayContigs
+                , renderGeneDetail model.showDnaSequence allGenes model.geneSequence
+                , renderGeneLegend model.geneFilter displayGenes
                 , Html.div [ HtmlAttr.style "margin-top" "1em" ]
                     [ Html.button
                         [ HE.onClick ToggleGeneTable
@@ -847,7 +935,7 @@ showGenomeMap model =
                         ]
                     ]
                 , if model.showGeneTable
-                    then renderGeneTable genes
+                    then renderGeneTable displayGenes
                     else Html.text ""
                 , Html.p [ HtmlAttr.style "margin-top" "1em"
                          , HtmlAttr.style "font-size" "0.9em"
@@ -863,7 +951,12 @@ showGenomeMap model =
                              , HtmlAttr.target "_blank"
                              ]
                         [ Html.text "Cantalapiedra et al., 2021" ]
-                    , Html.text ")."
+                    , Html.text "). rRNA genes predicted using "
+                    , Html.a [ HtmlAttr.href "https://github.com/tseemann/barrnap"
+                             , HtmlAttr.target "_blank"
+                             ]
+                        [ Html.text "Barrnap" ]
+                    , Html.text "."
                     ]
                 ]
 
@@ -985,6 +1078,51 @@ mapButtonSep =
         []
 
 
+geneFilterControls : GeneDisplayFilter -> Bool -> Html.Html Msg
+geneFilterControls current hasRRna =
+    if not hasRRna then
+        Html.text ""
+    else
+        Html.div
+            [ HtmlAttr.style "display" "flex"
+            , HtmlAttr.style "align-items" "center"
+            , HtmlAttr.style "gap" "0.5em"
+            , HtmlAttr.style "margin-bottom" "0.5em"
+            ]
+            [ Html.span
+                [ HtmlAttr.style "font-size" "0.85em"
+                , HtmlAttr.style "color" "#555"
+                ]
+                [ Html.text "Show:" ]
+            , Html.div
+                [ HtmlAttr.style "display" "inline-flex"
+                , HtmlAttr.style "border" "1px solid #ccc"
+                , HtmlAttr.style "border-radius" "4px"
+                , HtmlAttr.style "overflow" "hidden"
+                ]
+                [ filterButton "All" ShowAll current
+                , mapButtonSep
+                , filterButton "Protein coding" ShowProteinCoding current
+                , mapButtonSep
+                , filterButton "rRNA" ShowRRna current
+                ]
+            ]
+
+filterButton : String -> GeneDisplayFilter -> GeneDisplayFilter -> Html.Html Msg
+filterButton label filter current =
+    Html.button
+        [ HE.onClick (SetGeneFilter filter)
+        , HtmlAttr.style "padding" "0.3em 0.7em"
+        , HtmlAttr.style "font-size" "0.85em"
+        , HtmlAttr.style "cursor" "pointer"
+        , HtmlAttr.style "border" "none"
+        , HtmlAttr.style "background" (if filter == current then "#e3f2fd" else "#fff")
+        , HtmlAttr.style "color" (if filter == current then "#1565c0" else "#555")
+        , HtmlAttr.style "font-weight" (if filter == current then "600" else "normal")
+        , HtmlAttr.style "transition" "background 0.15s"
+        ]
+        [ Html.text label ]
+
 type alias ContigInfo =
     { name : String
     , maxPos : Int
@@ -1011,6 +1149,7 @@ groupByContig genes =
             in
             { name = cname, maxPos = maxP, genes = cGenes }
         )
+        |> List.sortBy (\c -> negate c.maxPos)
 
 
 genomeMapLayout :
@@ -1027,16 +1166,11 @@ genomeMapLayout =
     }
 
 
-renderGenomeMap : Float -> Float -> Maybe EMapperGene -> List EMapperGene -> Html.Html Msg
-renderGenomeMap zoom offset selectedGene genes =
+renderGenomeMap : Float -> Float -> Maybe EMapperGene -> Int -> List ContigInfo -> Html.Html Msg
+renderGenomeMap zoom offset selectedGene globalMax contigs =
     let
         lay = genomeMapLayout
-        contigs = groupByContig genes
         svgHeight = List.length contigs * (lay.rowHeight + lay.rowSpacing) + 10
-        globalMax = contigs
-            |> List.map .maxPos
-            |> List.maximum
-            |> Maybe.withDefault 1
         -- Virtual width of the full zoomed map
         virtualWidth = lay.mapWidth * zoom
         -- viewBox: we see mapWidth worth of virtual coords, offset into the virtual space
@@ -1170,6 +1304,20 @@ renderOverviewBar zoom offset contigs globalMax =
             ]
 
 
+geneColor : EMapperGene -> String
+geneColor gene =
+    case gene.geneType of
+        RRna rtype -> rRnaColor rtype
+        ProteinCoding -> cogColor (String.left 1 gene.cogCategory)
+
+rRnaColor : String -> String
+rRnaColor rtype =
+    case rtype of
+        "16S_rRNA" -> "#d50000"
+        "23S_rRNA" -> "#2962ff"
+        "5S_rRNA" -> "#00c853"
+        _ -> "#d50000"
+
 renderGeneArrow : Bool -> (Int -> Float) -> Float -> Maybe EMapperGene -> EMapperGene -> Svg.Svg Msg
 renderGeneArrow useArrows scale cy selectedGene gene =
     let
@@ -1177,7 +1325,7 @@ renderGeneArrow useArrows scale cy selectedGene gene =
         x2 = scale gene.end
         geneWidth = x2 - x1
         halfHeight = 8
-        color = cogColor (String.left 1 gene.cogCategory)
+        color = geneColor gene
         tooltipText =
             (if String.isEmpty gene.preferredName then gene.seqid else gene.preferredName)
                 ++ " [" ++ (if String.isEmpty gene.cogCategory then "-" else gene.cogCategory) ++ "]"
@@ -1379,54 +1527,68 @@ renderGeneDetail showDna allGenes state =
                 ]
 
         GeneSequenceLoaded gene seqData ->
+            let
+                isRRna = case gene.geneType of
+                    RRna _ -> True
+                    ProteinCoding -> False
+            in
             Html.div [ HtmlAttr.class "gene-detail-panel" ]
                 [ geneDetailHeader gene
                 , renderLocalNeighborhood gene allGenes
                 , geneAnnotationInfo gene
                 , Html.div []
-                    [ Html.div [ HtmlAttr.style "display" "flex"
-                               , HtmlAttr.style "align-items" "baseline"
-                               , HtmlAttr.style "gap" "0.5em"
-                               ]
-                        [ Html.h4 [ HtmlAttr.style "margin" "0.5em 0 0.25em 0" ]
-                            [ Html.text "Protein sequence"
-                            , Html.span [ HtmlAttr.style "font-weight" "normal"
-                                        , HtmlAttr.style "font-size" "0.85em"
-                                        , HtmlAttr.style "color" "#666"
-                                        , HtmlAttr.style "margin-left" "0.5em"
-                                        ]
-                                [ Html.text ("(" ++ showWithCommas (String.length seqData.protein) ++ " aa, translation table 11)") ]
-                            ]
-                        , copyButton "copy-protein" seqData.protein
-                        ]
-                    , Html.div [ HtmlAttr.class "sequence" ]
-                        (coloredProtein seqData.protein)
-                    , aaLegend
-                    , Html.div [ HtmlAttr.style "display" "flex"
-                               , HtmlAttr.style "align-items" "baseline"
-                               , HtmlAttr.style "gap" "0.5em"
-                               ]
-                        [ Html.h4 [ HtmlAttr.style "margin" "0.5em 0 0.25em 0"
-                                  , HtmlAttr.style "cursor" "pointer"
-                                  , HE.onClick ToggleDnaSequence
-                                  ]
-                            [ Html.text (if showDna then "\u{25BC} " else "\u{25B6} ")
-                            , Html.text "DNA sequence"
-                            , Html.span [ HtmlAttr.style "font-weight" "normal"
-                                        , HtmlAttr.style "font-size" "0.85em"
-                                        , HtmlAttr.style "color" "#666"
-                                        , HtmlAttr.style "margin-left" "0.5em"
-                                        ]
-                                [ Html.text ("(" ++ showWithCommas (String.length seqData.dna) ++ " bp)") ]
-                            ]
-                        , if showDna then copyButton "copy-dna" seqData.dna else Html.text ""
-                        ]
-                    , if showDna then
-                        Html.p [ HtmlAttr.class "sequence" ]
-                            [ Html.text seqData.dna ]
+                    (( if isRRna then
+                        []
                       else
-                        Html.text ""
-                    ]
+                        [ Html.div [ HtmlAttr.style "display" "flex"
+                                   , HtmlAttr.style "align-items" "baseline"
+                                   , HtmlAttr.style "gap" "0.5em"
+                                   ]
+                            [ Html.h4 [ HtmlAttr.style "margin" "0.5em 0 0.25em 0" ]
+                                [ Html.text "Protein sequence"
+                                , Html.span [ HtmlAttr.style "font-weight" "normal"
+                                            , HtmlAttr.style "font-size" "0.85em"
+                                            , HtmlAttr.style "color" "#666"
+                                            , HtmlAttr.style "margin-left" "0.5em"
+                                            ]
+                                    [ Html.text ("(" ++ showWithCommas (String.length seqData.protein) ++ " aa, translation table 11)") ]
+                                ]
+                            , copyButton "copy-protein" seqData.protein
+                            ]
+                        , Html.div [ HtmlAttr.class "sequence" ]
+                            (coloredProtein seqData.protein)
+                        , aaLegend
+                        ]
+                    )
+                    ++ [ Html.div [ HtmlAttr.style "display" "flex"
+                                  , HtmlAttr.style "align-items" "baseline"
+                                  , HtmlAttr.style "gap" "0.5em"
+                                  ]
+                            [ Html.h4 [ HtmlAttr.style "margin" "0.5em 0 0.25em 0"
+                                      , HtmlAttr.style "cursor" (if isRRna then "default" else "pointer")
+                                      , if isRRna then HtmlAttr.class "" else HE.onClick ToggleDnaSequence
+                                      ]
+                                [ if isRRna then
+                                    Html.text ""
+                                  else
+                                    Html.text (if showDna then "\u{25BC} " else "\u{25B6} ")
+                                , Html.text "DNA sequence"
+                                , Html.span [ HtmlAttr.style "font-weight" "normal"
+                                            , HtmlAttr.style "font-size" "0.85em"
+                                            , HtmlAttr.style "color" "#666"
+                                            , HtmlAttr.style "margin-left" "0.5em"
+                                            ]
+                                    [ Html.text ("(" ++ showWithCommas (String.length seqData.dna) ++ " bp)") ]
+                                ]
+                            , if showDna || isRRna then copyButton "copy-dna" seqData.dna else Html.text ""
+                            ]
+                       , if showDna || isRRna then
+                            Html.p [ HtmlAttr.class "sequence" ]
+                                [ Html.text seqData.dna ]
+                         else
+                            Html.text ""
+                       ]
+                    )
                 ]
 
 
@@ -1525,6 +1687,16 @@ geneAnnotationInfo gene =
                 , Html.td [ HtmlAttr.style "padding" "0.15em 0" ]
                     content
                 ]
+        typeRow =
+            case gene.geneType of
+                RRna rtype ->
+                    [ row "Type"
+                        [ Html.span [ HtmlAttr.style "color" (rRnaColor rtype) ]
+                            [ Html.text (String.replace "_" " " rtype) ]
+                        ]
+                    ]
+                ProteinCoding ->
+                    []
         cogRow =
             if String.isEmpty gene.cogCategory then
                 []
@@ -1548,7 +1720,7 @@ geneAnnotationInfo gene =
                     (List.intersperse (Html.text ", ")
                         (List.map keggModuleLink gene.keggModule))
                 ]
-        rows = cogRow ++ keggKoRow ++ keggModuleRow
+        rows = typeRow ++ cogRow ++ keggKoRow ++ keggModuleRow
     in
     if List.isEmpty rows then
         Html.text ""
@@ -1596,9 +1768,13 @@ geneDetailHeader gene =
              ]
         [ Html.h3 [ HtmlAttr.style "margin" "0" ]
             [ Html.text
-                (if String.isEmpty gene.preferredName
-                    then gene.seqid
-                    else gene.preferredName ++ " (" ++ gene.seqid ++ ")"
+                (case gene.geneType of
+                    RRna rtype ->
+                        String.replace "_" " " rtype
+                    ProteinCoding ->
+                        if String.isEmpty gene.preferredName
+                            then gene.seqid
+                            else gene.preferredName ++ " (" ++ gene.seqid ++ ")"
                 )
             ]
         , Html.span [ HtmlAttr.style "font-size" "0.85em"
@@ -1636,6 +1812,7 @@ renderGeneTable genes =
             [ Html.thead []
                 [ Html.tr []
                     [ Html.th [] [ Html.text "Gene ID" ]
+                    , Html.th [] [ Html.text "Type" ]
                     , Html.th [] [ Html.text "Contig" ]
                     , Html.th [] [ Html.text "Start" ]
                     , Html.th [] [ Html.text "End" ]
@@ -1651,6 +1828,11 @@ renderGeneTable genes =
                 (genes |> List.map (\gene ->
                     Html.tr []
                         [ Html.td [] [ Html.text gene.seqid ]
+                        , Html.td []
+                            [ case gene.geneType of
+                                ProteinCoding -> Html.text "CDS"
+                                RRna rtype -> Html.span [ HtmlAttr.style "color" (rRnaColor rtype) ] [ Html.text "rRNA" ]
+                            ]
                         , Html.td [] [ Html.text gene.contig ]
                         , Html.td [ HtmlAttr.style "text-align" "right" ] [ Html.text (showWithCommas gene.start) ]
                         , Html.td [ HtmlAttr.style "text-align" "right" ] [ Html.text (showWithCommas gene.end) ]
@@ -1691,6 +1873,53 @@ renderGeneTable genes =
             ]
         ]
 
+
+renderGeneLegend : GeneDisplayFilter -> List EMapperGene -> Html.Html Msg
+renderGeneLegend filter genes =
+    let
+        hasProtein = List.any (\g -> g.geneType == ProteinCoding) genes
+        hasRRna = List.any (\g -> g.geneType /= ProteinCoding) genes
+    in
+    Html.div []
+        [ if hasProtein then renderCogLegend genes else Html.text ""
+        , if hasRRna then renderRRnaLegend genes else Html.text ""
+        ]
+
+renderRRnaLegend : List EMapperGene -> Html.Html Msg
+renderRRnaLegend genes =
+    let
+        usedTypes =
+            genes
+                |> List.filterMap (\g -> case g.geneType of
+                    RRna rtype -> Just rtype
+                    ProteinCoding -> Nothing
+                )
+                |> List.foldl (\t acc -> if List.member t acc then acc else acc ++ [t]) []
+        allTypes = ["16S_rRNA", "23S_rRNA", "5S_rRNA"]
+        typesToShow = allTypes |> List.filter (\t -> List.member t usedTypes)
+    in
+    Html.div [ HtmlAttr.style "margin-top" "0.5em"
+             , HtmlAttr.style "display" "flex"
+             , HtmlAttr.style "flex-wrap" "wrap"
+             , HtmlAttr.style "gap" "0.3em 1em"
+             , HtmlAttr.style "font-size" "0.85em"
+             ]
+        (typesToShow |> List.map (\rtype ->
+            Html.span [ HtmlAttr.style "display" "inline-flex"
+                      , HtmlAttr.style "align-items" "center"
+                      , HtmlAttr.style "gap" "0.3em"
+                      ]
+                [ Html.span
+                    [ HtmlAttr.style "display" "inline-block"
+                    , HtmlAttr.style "width" "14px"
+                    , HtmlAttr.style "height" "14px"
+                    , HtmlAttr.style "background-color" (rRnaColor rtype)
+                    , HtmlAttr.style "border" "1px solid #999"
+                    ]
+                    []
+                , Html.text (String.replace "_" " " rtype)
+                ]
+        ))
 
 renderCogLegend : List EMapperGene -> Html.Html Msg
 renderCogLegend genes =

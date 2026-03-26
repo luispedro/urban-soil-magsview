@@ -184,22 +184,65 @@ export const onReady = ({ app, env }) => {
 
   app.ports.requestGeneSequence.subscribe(async function(request) {
     try {
-      const { magId, contig, start, end, strand, seqid } = request;
+      const { magId, contig, start, end, strand, seqid, skipTranslation } = request;
       const contigs = await fetchFasta(magId);
       const contigSeq = contigs.get(contig);
       if (!contigSeq) {
         app.ports.receiveGeneSequence.send({ error: `Contig ${contig} not found in FASTA` });
         return;
       }
-      // Coordinates are 1-based from eggnog-mapper
+      // Coordinates are 1-based
       let dna = contigSeq.slice(start - 1, end);
       if (strand === '-') {
         dna = reverseComplement(dna);
       }
-      const protein = translateDNA(dna);
+      const protein = skipTranslation ? '' : translateDNA(dna);
       app.ports.receiveGeneSequence.send({ dna, protein });
     } catch (err) {
       app.ports.receiveGeneSequence.send({ error: err.message || String(err) });
+    }
+  });
+
+  app.ports.requestRRnaGenes.subscribe(async function(request) {
+    try {
+      const { magId } = request;
+      const url = `https://sh-dog-mags-data.big-data-biology.org/ShanghaiDogsMAGAnnotations/Barrnap/${magId}_ribosomal.fna.gz`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        app.ports.receiveRRnaGenes.send({ error: `Failed to fetch rRNA data: ${response.status}` });
+        return;
+      }
+      const ds = new DecompressionStream('gzip');
+      const decompressed = response.body.pipeThrough(ds);
+      const reader = decompressed.getReader();
+      const decoder = new TextDecoder();
+      let text = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        text += decoder.decode(value, { stream: true });
+      }
+      text += decoder.decode();
+
+      // Parse FASTA headers: >{type}::{contig}:{start}-{end}({strand})
+      const genes = [];
+      const headerRegex = /^>(\w+)::(.+):(\d+)-(\d+)\(([+-])\)\s*$/;
+      for (const line of text.split('\n')) {
+        if (!line.startsWith('>')) continue;
+        const match = line.match(headerRegex);
+        if (match) {
+          genes.push({
+            rRnaType: match[1],
+            contig: match[2],
+            start: parseInt(match[3], 10),
+            end: parseInt(match[4], 10),
+            strand: match[5]
+          });
+        }
+      }
+      app.ports.receiveRRnaGenes.send({ genes });
+    } catch (err) {
+      app.ports.receiveRRnaGenes.send({ error: err.message || String(err) });
     }
   });
 }
