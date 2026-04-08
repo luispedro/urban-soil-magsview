@@ -36,6 +36,21 @@ span.taxonomy-class {
   font-size: small;
   color: #999;
 }
+p.taxonomy-toggle {
+  cursor: pointer;
+  user-select: none;
+  margin: 0;
+}
+p.taxonomy-toggle:hover span.taxonomy-header {
+  text-decoration: underline;
+}
+span.taxonomy-disclosure {
+  display: inline-block;
+  width: 1.2em;
+  color: #666;
+  font-size: 0.85em;
+  text-align: center;
+}
 li.representative {
   font-weight: bold;
 }

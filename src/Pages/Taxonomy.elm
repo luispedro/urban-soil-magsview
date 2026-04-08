@@ -591,28 +591,36 @@ showTree path useWget showDownloadModal downloadState treeNode =
                 |> List.filter (\x -> not (String.startsWith "r__" x))
                 |> String.join ";"
         card =
-            let isC = case treeNode of
+            let
+                isCollapsed = case treeNode of
                     CollapsedNode _ _ -> True
-                    ExpandedNode _ _ -> False
-                    LeafNode _ _ -> False
-                isL = case treeNode of
-                    CollapsedNode _ _ -> False
-                    ExpandedNode _ _ -> False
+                    _ -> False
+                isLeaf = case treeNode of
                     LeafNode _ _ -> True
-            in Html.p []
-                    [ Html.span [HtmlAttr.class "taxonomy-header"]
+                    _ -> False
+                disclosure =
+                    if isLeaf then
+                        ""
+                    else if isCollapsed then
+                        "▶"
+                    else
+                        "▼"
+                rowAttrs =
+                    if isLeaf then
+                        []
+                    else
+                        [ HE.onClick ((if isCollapsed then ExpandNode else CollapseNode) name)
+                        , HtmlAttr.class "taxonomy-toggle"
+                        ]
+            in Html.p rowAttrs
+                    [ Html.span [HtmlAttr.class "taxonomy-disclosure"]
+                        [Html.text disclosure]
+                    , Html.span [HtmlAttr.class "taxonomy-header"]
                         [ if String.isEmpty sname
                             then Html.em [] [Html.text "unnamed"]
                             else Html.text sname]
                     , Html.span [HtmlAttr.class "taxonomy-class"]
                         [Html.text (" ("++tlevel++")")]
-                    , if isL
-                        then Html.span [] []
-                        else Html.span
-                            [HE.onClick ((if isC then ExpandNode else CollapseNode) name)
-                            , HtmlAttr.style "cursor" "pointer"
-                            ]
-                            [ Html.text (" ["++ (if isC then "+" else "-")++ "]")]
                     ]
     in Html.div [ HtmlAttr.class "tree-node"
                 , HtmlAttr.class ("taxonomy-node-" ++ tlevel)]
