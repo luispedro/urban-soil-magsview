@@ -626,19 +626,18 @@ showTree path useWget showDownloadModal downloadState treeNode =
                 , HtmlAttr.class ("taxonomy-node-" ++ tlevel)]
         (card :: (case treeNode of
             CollapsedNode _ children ->
-                ( Html.p []
-                    [ Html.text ("Number of genomes: " ++ String.fromInt (List.length children))
-                    ]
-                ::
                 (if name == "r__Root" && List.length children > 1 then
                     []
                 else
                     [ Html.p []
-                        [ Html.a [ HtmlAttr.href ("/genomes?taxonomy=" ++ pathStr ++ "&taxnav=1")]
-                            [ Html.text "[Genomes in table]" ]
+                        [ Html.text "Total number of genomes: "
+                        , Html.strong []
+                            [ Html.text <| String.fromInt (List.length children) ]
+                        , Html.a [ HtmlAttr.href ("/genomes?taxonomy=" ++ pathStr ++ "&taxnav=1")]
+                            [ Html.text " [table]" ]
                         ]
                     ]
-                ))
+                )
             ExpandedNode _ children ->
                 (List.map (showTree (name::path) useWget showDownloadModal downloadState) children)
             LeafNode _ children ->
