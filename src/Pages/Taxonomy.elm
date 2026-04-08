@@ -56,11 +56,21 @@ type alias DownloadModal =
     , mags : List MAG
     }
 
+type alias TaxonEntry =
+    { name : String
+    , displayName : String
+    , level : String
+    , ancestors : List String
+    , count : Int
+    }
+
 type alias Model =
     { tree : TreeNode
     , showDownloadModal : Maybe DownloadModal
     , downloadState : DownloadState
     , useWget : Bool
+    , searchQuery : String
+    , allTaxa : List TaxonEntry
     }
 
 type DownloadState
@@ -78,6 +88,8 @@ type Msg =
     | GotFastaBytes String (Result Http.Error Bytes)
     | DownloadScript String String
     | SetUseWget Bool
+    | SetSearchQuery String
+    | JumpToTaxon (List String)
 
 type alias RouteParams =
     {}
@@ -110,6 +122,8 @@ init _ =
             , showDownloadModal = Nothing
             , downloadState = NotStarted
             , useWget = True
+            , searchQuery = ""
+            , allTaxa = buildAllTaxa mags
             }
     in
         ( model
@@ -179,6 +193,17 @@ update msg model =
             )
         SetUseWget v ->
             ({ model | useWget = v }, Effect.none)
+
+        SetSearchQuery q ->
+            ({ model | searchQuery = q }, Effect.none)
+
+        JumpToTaxon path ->
+            ( { model
+                | tree = expandPath path model.tree
+                , searchQuery = ""
+              }
+            , Effect.none
+            )
 
 
 bestTaxonName : List MAG -> String
@@ -389,22 +414,169 @@ getAllMAGs =
         >> List.concat
 
 
+buildAllTaxa : List MAG -> List TaxonEntry
+buildAllTaxa allMags =
+    let
+        prefixesOf : List String -> List (List String)
+        prefixesOf xs =
+            List.range 1 (List.length xs)
+                |> List.map (\n -> List.take n xs)
+
+        bumpCount : Maybe Int -> Maybe Int
+        bumpCount mv =
+            Just (1 + Maybe.withDefault 0 mv)
+
+        addPath : List String -> Dict String ( List String, Int ) -> Dict String ( List String, Int )
+        addPath path d =
+            Dict.update (String.join ";" path)
+                (\v ->
+                    case v of
+                        Just ( p, c ) -> Just ( p, c + 1 )
+                        Nothing -> Just ( path, 1 )
+                )
+                d
+
+        countByPath : Dict String ( List String, Int )
+        countByPath =
+            allMags
+                |> List.concatMap (\m -> prefixesOf (String.split ";" m.taxonomy))
+                |> List.foldl addPath Dict.empty
+    in
+    countByPath
+        |> Dict.values
+        |> List.filterMap (\( path, count ) ->
+            case List.reverse path of
+                name :: revAncestors ->
+                    let
+                        ( level, displayName ) =
+                            splitTaxon name
+                    in
+                    if String.isEmpty displayName then
+                        Nothing
+                    else
+                        Just
+                            { name = name
+                            , displayName = displayName
+                            , level = level
+                            , ancestors = List.reverse revAncestors
+                            , count = count
+                            }
+                [] ->
+                    Nothing
+        )
+
+
+searchTaxa : String -> List TaxonEntry -> List TaxonEntry
+searchTaxa query allTaxa =
+    let
+        q = String.toLower (String.trim query)
+    in
+    if String.length q < 2 then
+        []
+    else
+        let
+            matchScore entry =
+                let
+                    name = String.toLower entry.displayName
+                in
+                if name == q then
+                    0
+                else if String.startsWith q name then
+                    1
+                else
+                    2
+        in
+        allTaxa
+            |> List.filter (\e -> String.contains q (String.toLower e.displayName))
+            |> List.sortBy (\e -> ( matchScore e, String.length e.displayName, e.displayName ))
+            |> List.take 30
+
+
+expandPath : List String -> TreeNode -> TreeNode
+expandPath path tree =
+    List.foldl (\name t -> expandNode 0 name t) tree path
+
+
 view :
     Model
     -> View Msg
 view model =
-    let
-        m = model
-    in
-        { title = "Urban soil MAGs: Taxonomy explorer"
-        , body =
-            [ Html.div []
-                [ Html.h1 []
-                    [ Html.text "Taxonomy explorer" ]
-                ]
-            , showTree [] model.useWget model.showDownloadModal model.downloadState model.tree
+    { title = "Urban soil MAGs: Taxonomy explorer"
+    , body =
+        [ Html.div []
+            [ Html.h1 []
+                [ Html.text "Taxonomy explorer" ]
             ]
-        }
+        , searchView model
+        , showTree [] model.useWget model.showDownloadModal model.downloadState model.tree
+        ]
+    }
+
+
+searchView : Model -> Html.Html Msg
+searchView model =
+    let
+        results = searchTaxa model.searchQuery model.allTaxa
+
+        trimmed = String.trim model.searchQuery
+    in
+    Html.div [ HtmlAttr.class "taxonomy-search" ]
+        [ Html.label
+            [ HtmlAttr.for "taxonomy-search-input"
+            , HtmlAttr.class "taxonomy-search-label"
+            ]
+            [ Html.text "Jump to taxon: " ]
+        , Html.input
+            [ HtmlAttr.id "taxonomy-search-input"
+            , HtmlAttr.type_ "text"
+            , HtmlAttr.value model.searchQuery
+            , HtmlAttr.placeholder "e.g. Bacteroides"
+            , HtmlAttr.autocomplete False
+            , HE.onInput SetSearchQuery
+            ]
+            []
+        , if List.isEmpty results then
+            if String.length trimmed >= 2 then
+                Html.p [ HtmlAttr.class "taxonomy-search-empty" ]
+                    [ Html.text "No matches" ]
+            else
+                Html.text ""
+          else
+            Html.ul [ HtmlAttr.class "taxonomy-search-results" ]
+                (List.map searchResultRow results)
+        ]
+
+
+searchResultRow : TaxonEntry -> Html.Html Msg
+searchResultRow entry =
+    let
+        targetPath = entry.ancestors ++ [ entry.name ]
+
+        breadcrumbs =
+            entry.ancestors
+                |> List.filter (\a -> not (String.startsWith "r__" a))
+                |> List.map (\a ->
+                    let
+                        ( _, n ) = splitTaxon a
+                    in
+                    if String.isEmpty n then "?" else n
+                )
+                |> String.join " > "
+    in
+    Html.li
+        [ HE.onClick (JumpToTaxon targetPath)
+        , HtmlAttr.class "taxonomy-search-result"
+        ]
+        [ Html.span [ HtmlAttr.class "taxonomy-search-name" ]
+            [ Html.text entry.displayName ]
+        , Html.span [ HtmlAttr.class "taxonomy-class" ]
+            [ Html.text (" (" ++ entry.level ++ ", " ++ String.fromInt entry.count ++ " genomes)") ]
+        , if String.isEmpty breadcrumbs then
+            Html.text ""
+          else
+            Html.div [ HtmlAttr.class "taxonomy-search-breadcrumbs" ]
+                [ Html.text breadcrumbs ]
+        ]
 
 showTree : List String -> Bool -> Maybe DownloadModal -> DownloadState -> TreeNode -> Html.Html Msg
 showTree path useWget showDownloadModal downloadState treeNode =

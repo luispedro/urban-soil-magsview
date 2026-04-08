@@ -68,6 +68,56 @@ div.taxonomy-node-subspecies {
   background-color: #662506;
 }
 
+div.taxonomy-search {
+  margin: 0 0 1em 8px;
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  width: 30em;
+  background-color: #fafafa;
+}
+.taxonomy-search-label {
+  font-weight: bold;
+  margin-right: 6px;
+}
+#taxonomy-search-input {
+  padding: 4px 8px;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+  width: 16em;
+  font-size: 1em;
+}
+ul.taxonomy-search-results {
+  list-style: none;
+  margin: 8px 0 0 0;
+  padding: 0;
+  max-height: 22em;
+  overflow-y: auto;
+  border-top: 1px solid #eee;
+}
+li.taxonomy-search-result {
+  padding: 6px 8px;
+  border-bottom: 1px solid #eee;
+  cursor: pointer;
+}
+li.taxonomy-search-result:hover {
+  background-color: #eef3ff;
+}
+span.taxonomy-search-name {
+  font-weight: bold;
+}
+div.taxonomy-search-breadcrumbs {
+  font-size: 0.85em;
+  color: #888;
+  margin-top: 2px;
+}
+p.taxonomy-search-empty {
+  margin: 8px 0 0 0;
+  font-size: 0.9em;
+  color: #888;
+  font-style: italic;
+}
+
 .sequence {
     font-family: monospace;
     word-break: break-all;
