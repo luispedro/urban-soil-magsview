@@ -617,7 +617,7 @@ showTree path useWget showDownloadModal downloadState treeNode =
                         [Html.text disclosure]
                     , Html.span [HtmlAttr.class "taxonomy-header"]
                         [ if String.isEmpty sname
-                            then Html.em [] [Html.text "unnamed"]
+                            then Html.em [] [Html.text "unassigned"]
                             else Html.text sname]
                     , Html.span [HtmlAttr.class "taxonomy-class"]
                         [Html.text (" ("++tlevel++")")]
@@ -656,7 +656,11 @@ showTree path useWget showDownloadModal downloadState treeNode =
                         )
                     )
                 , Html.p [HtmlAttr.style "font-size" "small"]
-                    [ Html.text "Bolded elements are the species-representative MAGs" ]
+                    [ Html.text "Bolded elements are the species-representative MAGs."
+                    , if String.isEmpty sname && List.length children > 1
+                        then Html.em [] [Html.text " Note that is a leaf node containing the unassigned genomes for this lineage; they may not all originate from the same species."]
+                        else Html.text ""
+                    ]
                 , Html.p [HtmlAttr.style "text-align" "right"]
                     [ Html.a [ HtmlAttr.href ("/genomes?taxonomy=" ++ pathStr ++ "&taxnav=1")
                             , HtmlAttr.style "padding-right" "18px"
