@@ -44,7 +44,7 @@ async function fetchFasta(magId) {
   if (fastaFetching.has(magId)) {
     return fastaFetching.get(magId);
   }
-  const url = `https://sh-dog-mags-data.big-data-biology.org/ShanghaiDogsMAGs/${magId}.fna.gz`;
+  const url = `https://urban-soil-mags-data.big-data-biology.org/UrbanSoilMAGs/${magId}.fna.gz`;
   const promise = (async () => {
     const response = await fetch(url);
     if (!response.ok) {
@@ -206,7 +206,7 @@ export const onReady = ({ app, env }) => {
   app.ports.requestRRnaGenes.subscribe(async function(request) {
     try {
       const { magId } = request;
-      const url = `https://sh-dog-mags-data.big-data-biology.org/ShanghaiDogsMAGAnnotations/Barrnap/${magId}_ribosomal.fna.gz`;
+      const url = `https://urban-soil-mags-data.big-data-biology.org/UrbanSoilMAGAnnotations/Barrnap/${magId}_ribosomal.fna.gz`;
       const response = await fetch(url);
       if (!response.ok) {
         app.ports.receiveRRnaGenes.send({ error: `Failed to fetch rRNA data: ${response.status}` });
