@@ -35,7 +35,7 @@ import DataModel exposing (MAG)
 import Data exposing (mags)
 import Layouts
 import GenomeStats exposing (splitTaxon)
-import Downloads exposing (mkFASTALink)
+import Data.Info exposing (datasetName, mkFASTALink, mkReadmeFile, datasetTag, datasetSlug)
 
 
 type TreeNode =
@@ -255,7 +255,7 @@ handleBytesResponse response =
 buildAndDownloadZip : String -> List MAG -> Dict String Bytes -> Cmd Msg
 buildAndDownloadZip taxonName magsForDownload fetchedFiles =
     let
-        dir = "sh-dogs-magsview/"
+        dir = (datasetSlug ++ "-magsview/")
 
         safeTaxonName =
             taxonName
@@ -293,35 +293,15 @@ buildAndDownloadZip taxonName magsForDownload fetchedFiles =
         zip =
             Zip.fromEntries (readmeEntry :: tsvEntry :: fastaEntries)
     in
-    Download.bytes (safeTaxonName ++ ".zip") "application/zip" (Zip.toBytes zip)
+    Download.bytes (datasetTag ++ "_" ++ safeTaxonName ++ ".zip") "application/zip" (Zip.toBytes zip)
 
 
 readmeContent : String -> String
 readmeContent taxonName =
-    "# Shanghai Dog Gut MAGs: " ++ taxonName ++ "\n"
-        ++ "\n"
-        ++ "This archive contains metagenome-assembled genomes (MAGs) from the\n"
-        ++ "Shanghai Dog Gut MAG catalogue, filtered by taxonomy: " ++ taxonName ++ ".\n"
-        ++ "\n"
-        ++ "## Contents\n"
-        ++ "\n"
-        ++ "- `*.fna.gz` - Genome FASTA files (gzip-compressed)\n"
-        ++ "- `" ++ String.replace " " "_" taxonName ++ ".metadata.tsv` - MAG metadata (TSV format)\n"
-        ++ "- `README.md` - This file\n"
-        ++ "\n"
-        ++ "## Source\n"
-        ++ "\n"
-        ++ "Data downloaded from the Shanghai Dog Gut MAG Viewer:\n"
-        ++ "https://sh-dog-mags.big-data-biology.org/\n"
-        ++ "\n"
-        ++ "## Citation\n"
-        ++ "\n"
-        ++ "Cusco, A., Duan, Y., Gil, F., Chklovski, A., Kruthi, N., Pan, S.,\n"
-        ++ "Forslund, S., Lau, S., Lober, U., Zhao, X.-M., and Coelho, L.P.\n"
-        ++ "\"Capturing global pet dog gut microbial diversity and hundreds of\n"
-        ++ "near-finished bacterial genomes by using long-read metagenomics in a\n"
-        ++ "Shanghai cohort\" (bioRxiv PREPRINT 2025)\n"
-        ++ "DOI: https://doi.org/10.1101/2025.09.17.676595\n"
+    mkReadmeFile
+        taxonName
+        ("filtered by taxonomy (" ++ taxonName ++ ")")
+        (String.replace " " "_" taxonName)
 
 
 magMetadataTsv : List MAG -> String
@@ -501,7 +481,7 @@ view :
     Model
     -> View Msg
 view model =
-    { title = "Urban soil MAGs: Taxonomy explorer"
+    { title = (datasetName ++ ": Taxonomy explorer")
     , body =
         [ Html.div []
             [ Html.h1 []

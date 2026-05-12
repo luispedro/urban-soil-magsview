@@ -32,7 +32,7 @@ import DataModel exposing (MAG)
 import Layouts
 import GenomeStats exposing (taxonomyLast, printableTaxonomy, showTaxon)
 import Utils exposing (mkTooltipQuestionMark)
-import Downloads exposing (mkFASTALink, mkENOGLink, mkEMapperSummaryLink, mkBarrnapLink)
+import Data.Info exposing (mkFASTALink, mkENOGLink, mkEMapperSummaryLink, mkBarrnapLink)
 import GeneSequence
 
 -- INIT

@@ -43,7 +43,7 @@ import Bootstrap.Table as Table
 
 import DataModel exposing (MAG)
 import Data exposing (mags)
-import Downloads exposing (mkFASTALink)
+import Data.Info exposing (mkFASTALink, mkReadmeFile, datasetName, datasetTag, datasetSlug)
 import GenomeStats exposing (Quality(..), magQuality, taxonomyLast, splitTaxon, showTaxon)
 import Shared
 
@@ -193,7 +193,7 @@ update msg model =
                 tsv = mkTSV model
             in
                 ( model
-                , Effect.sendCmd <| Download.string "urban_soil_selected_genomes.tsv" "text/tab-separated-values" tsv
+                , Effect.sendCmd <| Download.string (datasetTag ++ "_selected_genomes.tsv") "text/tab-separated-values" tsv
                 )
         OnHover hovering ->
             ({ model | hovering = hovering }, Effect.none)
@@ -366,7 +366,7 @@ handleBytesResponse response =
 buildAndDownloadZip : List MAG -> Dict String Bytes -> Cmd Msg
 buildAndDownloadZip magsForDownload fetchedFiles =
     let
-        dir = "sh-dogs-magsview/"
+        dir = (datasetSlug ++ "-magsview/")
 
         entryMeta path =
             { path = path
@@ -387,7 +387,7 @@ buildAndDownloadZip magsForDownload fetchedFiles =
                 |> Bytes.Encode.encode
 
         tsvEntry =
-            Zip.Entry.store (entryMeta (dir ++ "SHD1_selected_genomes.metadata.tsv")) tsvBytes
+            Zip.Entry.store (entryMeta (dir ++ datasetTag ++ "_selected_genomes.metadata.tsv")) tsvBytes
 
         readmeBytes =
             readmeContent
@@ -400,36 +400,11 @@ buildAndDownloadZip magsForDownload fetchedFiles =
         zip =
             Zip.fromEntries (readmeEntry :: tsvEntry :: fastaEntries)
     in
-    Download.bytes "SHD1_selected_genomes.zip" "application/zip" (Zip.toBytes zip)
+    Download.bytes (datasetTag++"_selected_genomes.zip") "application/zip" (Zip.toBytes zip)
 
 
 readmeContent : String
-readmeContent =
-    "# Shanghai Dog Gut MAGs: Selected Genomes\n"
-        ++ "\n"
-        ++ "This archive contains metagenome-assembled genomes (MAGs) from the\n"
-        ++ "Shanghai Dog Gut MAG catalogue, selected from the genome browser table.\n"
-        ++ "\n"
-        ++ "## Contents\n"
-        ++ "\n"
-        ++ "- `*.fna.gz` - Genome FASTA files (gzip-compressed)\n"
-        ++ "- `SHD1_selected_genomes.metadata.tsv` - MAG metadata (TSV format)\n"
-        ++ "- `README.md` - This file\n"
-        ++ "\n"
-        ++ "## Source\n"
-        ++ "\n"
-        ++ "Data downloaded from the Shanghai Dog Gut MAG Viewer:\n"
-        ++ "https://sh-dog-mags.big-data-biology.org/\n"
-        ++ "\n"
-        ++ "## Citation\n"
-        ++ "\n"
-        ++ "Cusco, A., Duan, Y., Gil, F., Chklovski, A., Kruthi, N., Pan, S.,\n"
-        ++ "Forslund, S., Lau, S., Lober, U., Zhao, X.-M., and Coelho, L.P.\n"
-        ++ "\"Capturing global pet dog gut microbial diversity and hundreds of\n"
-        ++ "near-finished bacterial genomes by using long-read metagenomics in a\n"
-        ++ "Shanghai cohort\" (bioRxiv PREPRINT 2025)\n"
-        ++ "DOI: https://doi.org/10.1101/2025.09.17.676595\n"
-
+readmeContent = mkReadmeFile "Selected Genomes" "selected from the genome browser table" (datasetTag++"_selected_genomes")
 
 magMetadataTsv : List MAG -> String
 magMetadataTsv ms =
@@ -524,7 +499,7 @@ view model =
                     ] [ Html.text (if model.showFullTaxonomy then " [collapse]" else " [expand]") ]
                 ]
     in
-        { title = "Urban soil MAGs: Genomes table"
+        { title = (datasetName ++ ": Genomes table")
         , body =
             [ Html.div []
                 [ Html.h1 []
