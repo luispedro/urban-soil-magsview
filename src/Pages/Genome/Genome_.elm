@@ -12,6 +12,7 @@ import View exposing (View)
 import Http
 import Json.Decode as D
 import Json.Encode as E
+import Dict
 
 import Svg
 import Svg.Attributes as SvgAttr
@@ -922,6 +923,7 @@ showGenomeMap model =
                 , renderGenomeMap model.genomeMapZoom model.genomeMapOffset selectedGene globalMax displayContigs
                 , renderGeneDetail model.showDnaSequence allGenes model.geneSequence
                 , renderGeneLegend model.geneFilter displayGenes
+                , renderCogSummary proteinGenes
                 , Html.div [ HtmlAttr.style "margin-top" "1em" ]
                     [ Html.button
                         [ HE.onClick ToggleGeneTable
@@ -1872,6 +1874,254 @@ renderGeneTable genes =
                 ))
             ]
         ]
+
+
+type alias CogSummaryRow =
+    { category : String
+    , count : Int
+    }
+
+
+renderCogSummary : List EMapperGene -> Html.Html Msg
+renderCogSummary genes =
+    let
+        proteinGenes =
+            genes
+                |> List.filter (\g -> g.geneType == ProteinCoding)
+
+        rows =
+            proteinGenes
+                |> cogCategoryCounts
+                |> cogCountsToRows
+
+        assignedRows =
+            rows
+                |> List.filter (\row -> not (String.isEmpty row.category))
+                |> List.sortBy (\row -> 0 - row.count)
+
+        unassignedRows =
+            rows
+                |> List.filter (\row -> String.isEmpty row.category)
+
+        displayRows =
+            assignedRows ++ unassignedRows
+
+        assignedTotal =
+            assignedRows
+                |> List.map .count
+                |> List.sum
+
+        totalCds =
+            proteinGenes
+                |> List.length
+    in
+    if List.isEmpty proteinGenes then
+        Html.text ""
+
+    else
+        Html.div
+            [ HtmlAttr.style "margin-top" "1em"
+            , HtmlAttr.style "border-top" "1px solid #e5e7eb"
+            , HtmlAttr.style "padding-top" "1em"
+            ]
+            [ Html.h3
+                [ HtmlAttr.style "font-size" "1.1em"
+                , HtmlAttr.style "margin-bottom" "0.25em"
+                ]
+                [ Html.text "COG category summary" ]
+            , Html.p
+                [ HtmlAttr.style "font-size" "0.9em"
+                , HtmlAttr.style "color" "#555"
+                , HtmlAttr.style "margin-bottom" "0.75em"
+                ]
+                [ Html.text
+                    ("Primary COG class for "
+                        ++ showWithCommas assignedTotal
+                        ++ " annotated CDS"
+                    )
+                , if assignedTotal == totalCds then
+                    Html.text "."
+
+                  else
+                    Html.text
+                        ("; "
+                            ++ showWithCommas (totalCds - assignedTotal)
+                            ++ " CDS without a COG category."
+                        )
+                ]
+            , renderCogCompositionBar displayRows totalCds
+            , Html.div
+                [ HtmlAttr.style "max-width" "860px"
+                , HtmlAttr.style "overflow-x" "auto"
+                ]
+                [ Html.table
+                    [ HtmlAttr.class "table table-sm"
+                    , HtmlAttr.style "font-size" "0.9em"
+                    , HtmlAttr.style "margin-bottom" "0"
+                    ]
+                    [ Html.thead []
+                        [ Html.tr []
+                            [ Html.th [] [ Html.text "COG cat." ]
+                            , Html.th [] [ Html.text "Description" ]
+                            , Html.th [ HtmlAttr.style "text-align" "right" ] [ Html.text "CDS count" ]
+                            , Html.th [] [ Html.text "Share" ]
+                            , Html.th [ HtmlAttr.style "text-align" "right" ] [ Html.text "% of annotated" ]
+                            ]
+                        ]
+                    , Html.tbody []
+                        (displayRows
+                            |> List.map (renderCogSummaryRow assignedTotal)
+                        )
+                    ]
+                ]
+            ]
+
+
+cogCategoryCounts : List EMapperGene -> Dict.Dict String Int
+cogCategoryCounts genes =
+    genes
+        |> List.foldl
+            (\gene acc ->
+                Dict.update
+                    (String.left 1 gene.cogCategory)
+                    (\count -> Just (Maybe.withDefault 0 count + 1))
+                    acc
+            )
+            Dict.empty
+
+
+cogCountsToRows : Dict.Dict String Int -> List CogSummaryRow
+cogCountsToRows counts =
+    counts
+        |> Dict.toList
+        |> List.map
+            (\( category, count ) ->
+                { category = category, count = count }
+            )
+
+
+renderCogCompositionBar : List CogSummaryRow -> Int -> Html.Html Msg
+renderCogCompositionBar rows totalCds =
+    if totalCds <= 0 then
+        Html.text ""
+
+    else
+        Html.div
+            [ HtmlAttr.style "display" "flex"
+            , HtmlAttr.style "height" "14px"
+            , HtmlAttr.style "max-width" "860px"
+            , HtmlAttr.style "margin-bottom" "0.75em"
+            , HtmlAttr.style "border" "1px solid #d8dee7"
+            , HtmlAttr.style "border-radius" "4px"
+            , HtmlAttr.style "overflow" "hidden"
+            ]
+            (rows
+                |> List.map
+                    (\row ->
+                        Html.div
+                            [ HtmlAttr.style "width" (percentWidth row.count totalCds)
+                            , HtmlAttr.style "background-color" (cogColor row.category)
+                            , HtmlAttr.title
+                                ((if String.isEmpty row.category then
+                                    "No COG category"
+
+                                  else
+                                    row.category ++ ": " ++ cogDescription row.category
+                                 )
+                                    ++ " ("
+                                    ++ showWithCommas row.count
+                                    ++ " CDS)"
+                                )
+                            ]
+                            []
+                    )
+            )
+
+
+renderCogSummaryRow : Int -> CogSummaryRow -> Html.Html Msg
+renderCogSummaryRow assignedTotal row =
+    let
+        label =
+            if String.isEmpty row.category then
+                "-"
+
+            else
+                row.category
+
+        pctText =
+            if String.isEmpty row.category then
+                "-"
+
+            else
+                percentageText row.count assignedTotal
+    in
+    Html.tr []
+        [ Html.td []
+            [ Html.span
+                [ HtmlAttr.style "display" "inline-flex"
+                , HtmlAttr.style "align-items" "center"
+                , HtmlAttr.style "gap" "0.45em"
+                ]
+                [ Html.span
+                    [ HtmlAttr.style "display" "inline-block"
+                    , HtmlAttr.style "width" "0.85em"
+                    , HtmlAttr.style "height" "0.85em"
+                    , HtmlAttr.style "border" "1px solid #8a94a3"
+                    , HtmlAttr.style "background-color" (cogColor row.category)
+                    ]
+                    []
+                , Html.text label
+                ]
+            ]
+        , Html.td [] [ Html.text (cogDescription row.category) ]
+        , Html.td [ HtmlAttr.style "text-align" "right" ] [ Html.text (showWithCommas row.count) ]
+        , Html.td []
+            [ Html.div
+                [ HtmlAttr.style "height" "0.6em"
+                , HtmlAttr.style "min-width" "90px"
+                , HtmlAttr.style "max-width" "180px"
+                , HtmlAttr.style "background-color" "#eef2f7"
+                , HtmlAttr.style "border-radius" "2px"
+                , HtmlAttr.style "overflow" "hidden"
+                ]
+                [ Html.div
+                    [ HtmlAttr.style "height" "100%"
+                    , HtmlAttr.style "width" (percentWidth row.count assignedTotal)
+                    , HtmlAttr.style "background-color" (cogColor row.category)
+                    ]
+                    []
+                ]
+            ]
+        , Html.td [ HtmlAttr.style "text-align" "right" ] [ Html.text pctText ]
+        ]
+
+
+percentageText : Int -> Int -> String
+percentageText count total =
+    if total <= 0 then
+        "-"
+
+    else
+        let
+            tenths =
+                round ((toFloat count * 1000) / toFloat total)
+
+            whole =
+                tenths // 10
+
+            decimal =
+                modBy 10 tenths
+        in
+        String.fromInt whole ++ "." ++ String.fromInt decimal ++ " %"
+
+
+percentWidth : Int -> Int -> String
+percentWidth count total =
+    if total <= 0 then
+        "0%"
+
+    else
+        String.fromFloat ((toFloat count * 100) / toFloat total) ++ "%"
 
 
 renderGeneLegend : GeneDisplayFilter -> List EMapperGene -> Html.Html Msg
